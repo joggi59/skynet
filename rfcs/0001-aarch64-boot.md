@@ -668,8 +668,9 @@ ones. `build.rs` uses only the host `std`, which is not a manifest dependency an
 the kernel image.
 
 `overflow-checks = true` in release is deliberate for a kernel intended to run in cars. Its failure
-mode at M0 is the silent halt described above; that is a cost, recorded in O-4 rather than avoided by
-turning the checks off.
+mode is the panic path: an overflow emits `SKYNET_PANIC` and stops, which CI scores as a failure
+immediately. It costs a little image size and it says nothing about *which* overflow, which is O-4's
+problem and not a reason to turn the checks off.
 
 If the link reports undefined `memcpy`, `memset` or `memcmp`, they are written in a new portable
 module `kernel/src/mem.rs` and never obtained from a crate. `rust-std` for `*-none` targets normally
@@ -1119,4 +1120,15 @@ also listed.
 never set, so this is theoretical today, but an unbounded wait on a device flag in a boot path is
 exactly the kind of thing that becomes a hang in a car ten years from now. Bounding it needs a notion
 of time, which M0 does not have, and dropping bytes on timeout would make the marker check flaky. It
-interacts with the boot-duration budget enforced from M2 and should be settled then.
+interacts with the boot-duration budget enforced from M2 and should be settled then. Note that it is
+worse in the failure path than the boot path: `fail_stop` spinning on a wedged UART is a panic that
+never reports and never stops the machine.
+
+**O-8.** Powering the machine off on panic is a bring-up behaviour driven by the test harness, and
+this RFC adopts it because `ci/lib.sh` specifies it. It is not what a kernel in a car should do — a
+panicked ECU should reset under a watchdog, not switch itself off, and "power off on fault" is a
+policy decision that belongs to the operator rather than to the kernel. The question is when the
+boot contract should stop asking for it, and what replaces it: most likely `SYSTEM_RESET`
+(`0x8400_0009`) or a watchdog once M2 has one, with power-off retained only under a build
+configuration meant for CI. Raised now because it is much easier to change while there is exactly one
+caller.

@@ -107,10 +107,25 @@ profile_target() { toml_get "$(profile_file)" "d['profile']['target']"; }
 
 INSTALL_HINT='sudo dnf install qemu-system-aarch64 rust-std-static-aarch64-unknown-none-softfloat dtc'
 
+# Is the target's `core` actually reachable?
+#
+# Not "does /usr/lib/rustlib/<target> exist" — that answers where the libraries
+# came from, which is not the question. A sysroot supplied through RUSTFLAGS is
+# as valid as one installed by the distribution, and hard-coding the system path
+# made a working toolchain report PENDING.
+effective_sysroots() {
+    echo "/usr"
+    # --sysroot=/path or --sysroot /path, anywhere in RUSTFLAGS.
+    echo "${RUSTFLAGS:-}" | grep -oE -- '--sysroot[= ][^ ]+' | sed -E 's/^--sysroot[= ]//'
+}
+
 have_rust_target() {
-    local t="${1:-$(profile_target)}"
-    [ -d "/usr/lib/rustlib/$t" ] || rustc --print target-list 2>/dev/null | grep -qx "$t" && \
-        [ -d "/usr/lib/rustlib/$t" ]
+    local t="${1:-$(profile_target)}" sr
+    while IFS= read -r sr; do
+        [ -n "$sr" ] || continue
+        [ -d "$sr/lib/rustlib/$t/lib" ] && return 0
+    done < <(effective_sysroots)
+    return 1
 }
 
 # The emulator. Overridable so a machine that has QEMU somewhere other than the

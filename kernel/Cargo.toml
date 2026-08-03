@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# No [dependencies], [build-dependencies] or [dev-dependencies] sections exist —
+# not even empty ones. Constitutional invariant 7 is checked against the
+# resolved graph in Cargo.lock as well as this manifest. If you need a spinlock,
+# write the spinlock.
+#
+# build.rs uses the host std, which is not a manifest dependency and ships
+# nothing into the kernel image.
+
+[package]
+name    = "skynet-kernel"       # ci/lib.sh:kernel_binary() depends on this exact name
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"           # #[unsafe(naked)] / naked_asm!
+license = "GPL-3.0-or-later"
+publish = false
+build   = "build.rs"
+
+[[bin]]
+name = "skynet-kernel"
+path = "src/main.rs"
+
+[profile.release]
+opt-level       = "s"
+lto             = true
+codegen-units   = 1
+panic           = "abort"       # already this target's default; stated so it cannot drift
+overflow-checks = true          # deliberate for a kernel meant to run in cars: an overflow
+                                # takes the panic path, which CI scores as failure immediately
+debug           = false
+strip           = false         # keeps .symtab for ci/boot-test.sh --gdb, and costs nothing:
+                                # the budget is measured from objcopy -O binary, which never
+                                # contains a symbol table
+
+[profile.dev]
+panic = "abort"

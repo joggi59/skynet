@@ -46,6 +46,7 @@ load_contribution() {
     C_MODEL=$(toml_get     "$dir/contribution.toml" "d['contribution']['model']")
     C_BRANCH=$(toml_get    "$dir/contribution.toml" "d['contribution']['branch']")
     C_PROMPT_HASH=$(toml_get "$dir/contribution.toml" "d['contribution'].get('prompt_hash','')")
+    C_BRANCH_SHA=$(toml_get "$dir/contribution.toml" "d['contribution'].get('branch_sha','')")
     C_SIGNATURE=$(toml_get "$dir/contribution.toml" "d['contribution'].get('signature','')")
 
     # Where the mechanical conditions must run.
@@ -213,6 +214,28 @@ cond_guardian() {
 cond_provenance() {
     heading "10. Provenance"
     local ok=1
+
+    # The verdicts describe a tree. If the branch moved after they were cast,
+    # they describe something that no longer exists.
+    #
+    # A reviewer caught this happening — the worktree was being rewritten while
+    # it measured — and defended itself by working from clean extractions of the
+    # committed tree. A judge protecting itself from the party assembling its
+    # brief is not a control, so this is one.
+    if [ -n "${C_BRANCH_SHA:-}" ]; then
+        local now; now=$(git rev-parse "$C_BRANCH" 2>/dev/null)
+        if [ "$now" != "$C_BRANCH_SHA" ]; then
+            fail "the branch moved after this contribution was submitted"
+            detail "submitted: ${C_BRANCH_SHA:0:12}"
+            detail "now:       ${now:0:12}"
+            detail "every verdict was cast on a tree that no longer exists — resubmit"
+            ok=0
+        else
+            info "branch unchanged since submission (${now:0:12})"
+        fi
+    else
+        info "no branch pin — recorded before this check existed"
+    fi
     for field in C_TASK C_OBJECTIVE C_AGENT C_MODEL C_BRANCH; do
         if [ -z "${!field:-}" ]; then
             fail "provenance field ${field#C_} is empty"

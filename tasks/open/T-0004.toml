@@ -1,0 +1,119 @@
+[task]
+id = "T-0004"
+title = "Install exception vectors and report faults legibly"
+rfc = "0002"
+objective = "0001"
+state = "open"
+estimated_difficulty = "medium"
+profile = "standard"
+
+statement = """
+Give the kernel control of its own faults.
+
+Today VBAR_EL1 is never written, so any exception vectors to address zero and
+executes whatever is there. Review measured what that costs: an overflow in the
+console path produced 10,262,934 undefined-instruction exceptions in four
+seconds, with no console output at all. The kernel's behaviour on any hardware
+fault is silence followed by a CI timeout.
+
+Deliver a sixteen-entry vector table, installed before any Rust runs, whose
+entries save the registers they clobber and branch to one shared handler that
+decodes ESR_EL1, FAR_EL1 and ELR_EL1 into a fixed-width report and stops.
+
+The rest of M1 — MMU, page tables, frame allocator, heap — produces faults
+continuously while it is being written. A bad page table entry is a data abort,
+and a data abort today is an unbreakable silent loop. This exists so the rest of
+M1 is debuggable.
+
+Two constraints that are design decisions, not preferences:
+
+  The fault path goes through fail.rs and its existing IN_FAILURE guard. Do NOT
+  mint a console in exception.rs. One module mints devices; that claim is
+  currently true and this task must not weaken it.
+
+  No core::fmt. A hand-rolled hex writer, because the same 192 KiB budget has to
+  fit an MMU, page tables and an allocator later in this milestone.
+"""
+
+[task.acceptance]
+criteria = [
+    "ci/build.sh exits 0",
+    "ci/build.sh --lint reports zero clippy warnings",
+    "ci/boot-test.sh passes and a successful boot prints exactly what it printed before — SKYNET_BOOT_OK and nothing else",
+    "SKYNET_PROFILE=nano ci/build.sh --size is within the 192 KiB budget",
+    "readelf -S shows the vector table 2 KiB aligned",
+    "the disassembly of _start shows VBAR_EL1 written before the branch into Rust",
+    "PROOF: an undefined instruction injected into kernel_main produces SKYNET_FAULT naming cur_spx_sync, EC 0x00, and an ELR matching the injection site, then stops. Run it and show the output; then remove the injection",
+    "PROOF: a fault injected inside fault_stop itself halts on the guard. Review measured 10,262,934 exceptions in four seconds without it — show the count is now one report, or none, and a halt",
+    "ci/constitution-check.sh --check hal-boundary passes",
+    "ci/constitution-check.sh --check no-kernel-deps passes",
+    "grep for BootConsole::new and PowerControl::new finds call sites ONLY in fail.rs — the fault path must not add a minting site",
+    "REVIEW: the hex formatter cannot itself fault — no indexing that can go out of bounds, no arithmetic that can overflow under overflow-checks = true",
+    "REVIEW: all sixteen entries are populated, including the twelve that cannot occur at M1, and the report distinguishes which slot was taken",
+    "REVIEW: the report says something honest about ELR for SError (EC 0x2F), which is asynchronous and may name an unrelated instruction — RFC-0002 O-2 leaves the wording to you",
+]
+
+[task.scope]
+touches = [
+    "kernel/src/arch/aarch64/exception.rs",
+    "kernel/src/arch/aarch64/hex.rs",
+    "kernel/src/arch/aarch64/fail.rs",
+    "kernel/src/arch/aarch64/boot.rs",
+    "kernel/src/arch/aarch64/mod.rs",
+    "kernel/src/arch/aarch64/link.ld",
+]
+does_not_touch = [
+    "ci/                — the implementer may not edit the checks that judge it",
+    "rfcs/              — the design is settled; if it is wrong, release the task",
+    "roadmap/, governance/, CONSTITUTION.md, constitution.toml",
+    ".provenance/",
+    "kernel/src/main.rs, hal.rs, panic.rs, arch/mod.rs — no portable file should change. If one must, say why in the submission rather than changing it quietly",
+]
+
+[task.constitutional]
+at_risk = [
+    "6 — HAL boundary: this is entirely architecture-specific and no portable file may gain a line. RFC-0002 section 7 explains why a portable FaultReport trait would be an abstraction over its only implementation",
+    "1 — no ambient authority (pending, M4): the fault path must route through fail.rs. A second minting site would move the reach-around review already found once",
+    "4 — frugality: this is the first contribution to spend real budget. 2 KiB of table plus the handler. Report the number",
+    "5 — zero telemetry (pending, M6): the report goes to the local console only",
+]
+
+[task.notes]
+hints = """
+aarch64 facts you should not have to rediscover:
+
+  VBAR_EL1 must be 2048-byte aligned; the low bits are RES0 and a misaligned
+  write silently lands elsewhere.
+  Sixteen entries of 128 bytes each = 0x800 total. Use .align 11.
+
+  Order, four groups of four (Synchronous, IRQ, FIQ, SError):
+    0x000  Current EL with SP_EL0     unreachable at M1 — we run EL1h
+    0x200  Current EL with SP_ELx     the four that can happen
+    0x400  Lower EL using AArch64     unreachable until M3
+    0x600  Lower EL using AArch32     never; AArch32 is unsupported
+
+  ESR_EL1[31:26] is the exception class. 0x00 unknown (usually an undefined
+  instruction), 0x0E illegal execution state, 0x15 SVC from AArch64, 0x21
+  instruction abort same EL, 0x25 data abort same EL, 0x2F SError, 0x3C BRK.
+  Print the raw EC for anything else rather than guessing.
+
+  FAR_EL1 is meaningful for aborts and stale otherwise. Say so instead of
+  printing a stale value as though it meant something.
+
+Traps:
+
+  An entry is 128 bytes and that is a hard limit — the assembler will not warn
+  you, the next entry will simply start in the middle of your code. Keep entries
+  short: save, load the slot number, branch.
+
+  The handler runs on the faulting stack. If the fault WAS a stack overflow it
+  pushes further into whatever is below. RFC-0002 O-1 records this; it needs the
+  MMU to fix properly and is not yours to solve here.
+
+  Do not try to make faults resumable. Nothing at M1 can be resumed and an eret
+  from a handler that did not save a full frame is worse than a halt.
+
+  overflow-checks = true is on in release. Anything in the hex path that can
+  overflow takes the panic path, from inside the fault path. Write it so it
+  cannot.
+"""

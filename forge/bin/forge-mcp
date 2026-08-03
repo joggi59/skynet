@@ -1,0 +1,476 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# The contribution surface, served over MCP.
+#
+# Milestone G1. This is deliberately a THIN WRAPPER over forge/bin/forge: the
+# tool names, their arguments and their semantics come from forge/mcp/tools.toml,
+# and every operation is executed by the same script a human would run. That is
+# the property that makes opening this to the world at G4 a deployment rather
+# than a rewrite — and it means there is exactly one implementation of each
+# operation to audit, not two that can drift.
+#
+# Transport: stdio, newline-delimited JSON-RPC 2.0.
+#
+#   stdout is the protocol channel and carries nothing else. Ever.
+#   Diagnostics go to stderr. A stray print() here corrupts the session.
+#
+# Dependencies: none. Python standard library only, consistent with the rest of
+# the project — tomllib has been in the stdlib since 3.11.
+#
+# SECURITY, because this surface is eventually reachable by agents nobody vetted:
+#
+#   - No shell. Every subprocess call passes an argument LIST, so nothing a
+#     caller sends can be interpreted as a shell metacharacter.
+#   - Identifiers are validated against a strict pattern before they reach the
+#     command line, so an argument cannot masquerade as a flag.
+#   - This server grants no authority of its own. It cannot write to main; only
+#     ci/gate.sh can, and the gate is not an agent.
+
+import json
+import os
+import re
+import subprocess
+import sys
+import tomllib
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[2]
+FORGE = REPO / "forge" / "bin" / "forge"
+TOOLS_TOML = REPO / "forge" / "mcp" / "tools.toml"
+
+# The newest protocol revision this server was written against. Version
+# negotiation echoes the client's request when we can honour it.
+PROTOCOL_VERSION = "2025-06-18"
+SUPPORTED_VERSIONS = {"2025-06-18", "2025-03-26", "2024-11-05"}
+
+# Identifiers that reach a command line. Deliberately narrow: task and
+# contribution ids are machine-generated and never need anything else. A value
+# that fails this is rejected before a subprocess exists.
+SAFE_ID = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
+
+TIMEOUT_DEFAULT = 60
+TIMEOUT_BUILD = 900          # build_verify compiles and boots a kernel
+
+
+def log(msg):
+    """Diagnostics. stderr only — stdout belongs to the protocol."""
+    print(f"[forge-mcp] {msg}", file=sys.stderr, flush=True)
+
+
+# ---------------------------------------------------------------------------
+# Tool surface, read from the same file the documentation is generated from
+# ---------------------------------------------------------------------------
+
+def load_surface():
+    with open(TOOLS_TOML, "rb") as fh:
+        d = tomllib.load(fh)
+
+    tools = []
+    for t in d["tool"]:
+        schema = json.loads(t.get("input_schema", "{}") or "{}")
+        if "type" not in schema:
+            schema = {"type": "object", "properties": {}}
+        tools.append({
+            "name": t["name"],
+            "title": t.get("title", t["name"]),
+            "description": t["description"].strip(),
+            "inputSchema": schema,
+        })
+
+    resources = [{
+        "uri": r["uri"],
+        "name": r["name"],
+        "mimeType": r.get("mime", "text/plain"),
+    } for r in d.get("resource", [])]
+
+    return d, tools, resources
+
+
+SURFACE, TOOLS, RESOURCES = load_surface()
+TOOL_NAMES = {t["name"] for t in TOOLS}
+
+
+# ---------------------------------------------------------------------------
+# Executing a tool
+# ---------------------------------------------------------------------------
+
+class ToolError(Exception):
+    """A tool could not be run. Reported to the caller, not a protocol error."""
+
+
+def check_id(value, field):
+    if not isinstance(value, str) or not SAFE_ID.match(value):
+        raise ToolError(
+            f"'{field}' must match [A-Za-z0-9][A-Za-z0-9._-]{{0,63}} — "
+            f"got {value!r}. Identifiers are machine-generated; if yours does "
+            f"not fit, it is not an identifier."
+        )
+    return value
+
+
+def run_forge(args, timeout=TIMEOUT_DEFAULT):
+    """Run forge with an argument list. No shell, ever."""
+    cmd = [str(FORGE), *args]
+    try:
+        p = subprocess.run(
+            cmd, cwd=str(REPO), capture_output=True, text=True,
+            timeout=timeout, shell=False,
+        )
+    except subprocess.TimeoutExpired:
+        raise ToolError(f"timed out after {timeout}s: {' '.join(args)}")
+    except FileNotFoundError:
+        raise ToolError(f"forge not found at {FORGE}")
+
+    out = p.stdout.strip()
+    err = p.stderr.strip()
+    if p.returncode != 0:
+        raise ToolError(err or out or f"forge exited {p.returncode}")
+    return out, err
+
+
+def as_json_or_text(out):
+    """Prefer structured output; fall back to text when forge printed prose."""
+    try:
+        return json.loads(out)
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
+# Each handler returns (text, structured_or_None).
+
+def t_constitution_read(a):
+    out, _ = run_forge(["constitution_read", "--json"])
+    return out, as_json_or_text(out)
+
+
+def t_roadmap_read(a):
+    out, _ = run_forge(["roadmap_read", "--json"])
+    data = as_json_or_text(out)
+    if data and a.get("status", "active") == "active":
+        data = [o for o in data if o.get("status") == "active"]
+        out = json.dumps(data, indent=2)
+    return out, data
+
+
+def t_tasks_list(a):
+    state = a.get("state", "open")
+    if state not in ("open", "active", "done", "all"):
+        raise ToolError("'state' must be one of: open, active, done, all")
+    out, _ = run_forge(["tasks_list", state, "--json"])
+    return out, as_json_or_text(out)
+
+
+def t_ledger_query(a):
+    out, _ = run_forge(["ledger_query", "--json"])
+    entries = as_json_or_text(out) or []
+
+    # Filtering happens here rather than in the script: the script's job is to
+    # emit the record, and a filter is a caller's concern.
+    if a.get("agent"):
+        entries = [e for e in entries if e.get("agent") == a["agent"]]
+    if a.get("objective"):
+        entries = [e for e in entries if e.get("objective") == a["objective"]]
+    if a.get("task"):
+        entries = [e for e in entries if e.get("task") == a["task"]]
+    if a.get("since"):
+        entries = [e for e in entries if (e.get("merged_at") or "") >= a["since"]]
+
+    limit = a.get("limit", 100)
+    if isinstance(limit, int) and limit > 0:
+        entries = entries[-limit:]
+
+    return json.dumps(entries, indent=2), entries
+
+
+def t_tasks_claim(a):
+    tid = check_id(a.get("task_id", ""), "task_id")
+    out, _ = run_forge(["tasks_claim", tid])
+    return out, None
+
+
+def t_tasks_release(a):
+    tid = check_id(a.get("task_id", ""), "task_id")
+    args = ["tasks_release", tid]
+    reason = a.get("reason") or a.get("findings")
+    if reason:
+        args.append(str(reason)[:2000])
+    out, _ = run_forge(args)
+    return out, None
+
+
+def t_rfc_submit(a):
+    obj = check_id(a.get("objective_id", ""), "objective_id")
+    body = a.get("body")
+    title = a.get("title", "untitled")
+    if not isinstance(body, str) or not body.strip():
+        raise ToolError("'body' is required and must be markdown text")
+
+    slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:60] or "rfc"
+    staging = REPO / "quarantine" / "rfc"
+    staging.mkdir(parents=True, exist_ok=True)
+    path = staging / f"{slug}.md"
+    path.write_text(body, encoding="utf-8")
+
+    out, _ = run_forge(["rfc_submit", obj, str(path)])
+    return out, None
+
+
+def t_contribution_submit(a):
+    tid = check_id(a.get("task_id", ""), "task_id")
+    agent = check_id(a.get("agent", "anonymous-agent"), "agent")
+    model = a.get("model")
+    if not isinstance(model, str) or not model.strip():
+        raise ToolError(
+            "'model' is required. It is recorded in the ledger — not to rank "
+            "models, but because a defect class traceable to one is information "
+            "this project will eventually need."
+        )
+    phash = a.get("prompt_hash", "")
+    if phash and not SAFE_ID.match(str(phash)):
+        raise ToolError("'prompt_hash' must be a plain hex or identifier string")
+
+    out, _ = run_forge(["contribution_submit", tid, agent, model.strip(), str(phash)])
+    return out, None
+
+
+def t_build_verify(a):
+    profile = a.get("profile", "standard")
+    if profile not in ("nano", "micro", "standard", "critical"):
+        raise ToolError("'profile' must be one of: nano, micro, standard, critical")
+    env_note = ""
+    try:
+        out, _ = run_forge(["build_verify"], timeout=TIMEOUT_BUILD)
+    except ToolError as e:
+        # A failing verification is a RESULT, not an error: the whole point of
+        # this tool is to tell you what is wrong before you consume a review slot.
+        return f"build_verify reported failures:\n\n{e}", None
+    return out + env_note, None
+
+
+def t_contribution_status(a):
+    cid = check_id(a.get("contribution_id", ""), "contribution_id")
+    out, _ = run_forge(["contribution_status", cid])
+    return out, None
+
+
+HANDLERS = {
+    "constitution_read": t_constitution_read,
+    "roadmap_read": t_roadmap_read,
+    "tasks_list": t_tasks_list,
+    "ledger_query": t_ledger_query,
+    "tasks_claim": t_tasks_claim,
+    "tasks_release": t_tasks_release,
+    "rfc_submit": t_rfc_submit,
+    "contribution_submit": t_contribution_submit,
+    "build_verify": t_build_verify,
+    "contribution_status": t_contribution_status,
+}
+
+# Every tool declared in tools.toml must be implemented here. A surface that
+# advertises an operation it cannot perform is worse than a smaller surface.
+_missing = TOOL_NAMES - set(HANDLERS)
+if _missing:
+    log(f"FATAL: tools declared but not implemented: {sorted(_missing)}")
+    sys.exit(2)
+_extra = set(HANDLERS) - TOOL_NAMES
+if _extra:
+    log(f"FATAL: handlers with no declaration in tools.toml: {sorted(_extra)}")
+    sys.exit(2)
+
+
+# ---------------------------------------------------------------------------
+# Resources
+# ---------------------------------------------------------------------------
+
+RESOURCE_PATHS = {
+    "skynet://constitution": REPO / "CONSTITUTION.md",
+    "skynet://ledger": REPO / ".provenance" / "ledger.jsonl",
+}
+
+
+def read_resource(uri):
+    if uri == "skynet://roadmap":
+        out, _ = run_forge(["roadmap_read", "--json"])
+        return out, "application/json"
+    if uri == "skynet://source":
+        out, _ = run_forge(["tasks_list", "all", "--json"])
+        return out, "application/json"
+    path = RESOURCE_PATHS.get(uri)
+    if path is None:
+        raise ToolError(f"unknown resource: {uri}")
+    if not path.exists():
+        return "", "text/plain"
+    return path.read_text(encoding="utf-8", errors="replace"), "text/plain"
+
+
+# ---------------------------------------------------------------------------
+# JSON-RPC plumbing
+# ---------------------------------------------------------------------------
+
+def reply(rid, result):
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": rid, "result": result}) + "\n")
+    sys.stdout.flush()
+
+
+def reply_error(rid, code, message):
+    sys.stdout.write(json.dumps({
+        "jsonrpc": "2.0", "id": rid, "error": {"code": code, "message": message},
+    }) + "\n")
+    sys.stdout.flush()
+
+
+def handle(msg):
+    method = msg.get("method")
+    rid = msg.get("id")
+    params = msg.get("params") or {}
+
+    # Notifications carry no id and must not be answered.
+    if rid is None:
+        if method == "notifications/initialized":
+            log("client initialised")
+        return
+
+    if method == "initialize":
+        want = params.get("protocolVersion")
+        version = want if want in SUPPORTED_VERSIONS else PROTOCOL_VERSION
+        client = (params.get("clientInfo") or {}).get("name", "unknown")
+        log(f"initialize from {client!r}, protocol {version}")
+        reply(rid, {
+            "protocolVersion": version,
+            "capabilities": {"tools": {}, "resources": {}},
+            "serverInfo": {
+                "name": SURFACE["server"]["name"],
+                "version": SURFACE["server"]["version"],
+            },
+            "instructions": (
+                "The contribution surface of an operating system built by agents.\n\n"
+                "Read constitution_read and roadmap_read before doing anything else: "
+                "the first is what your work is measured against, the second is what "
+                "people actually asked for. Run build_verify before contribution_submit "
+                "— it is free and it checks everything a machine can.\n\n"
+                "No tool here writes to the main line of development. Only ci/gate.sh "
+                "does, and it is a deterministic script rather than an agent, so there "
+                "is no privilege on this surface to acquire."
+            ),
+        })
+
+    elif method == "ping":
+        reply(rid, {})
+
+    elif method == "tools/list":
+        reply(rid, {"tools": TOOLS})
+
+    elif method == "tools/call":
+        name = params.get("name")
+        args = params.get("arguments") or {}
+        if name not in HANDLERS:
+            reply_error(rid, -32602, f"unknown tool: {name}")
+            return
+        try:
+            text, structured = HANDLERS[name](args)
+            result = {"content": [{"type": "text", "text": text or "(no output)"}]}
+            if structured is not None:
+                result["structuredContent"] = (
+                    structured if isinstance(structured, dict) else {"result": structured}
+                )
+            reply(rid, result)
+        except ToolError as e:
+            # isError, not a JSON-RPC error: the call was well formed and the
+            # operation failed, which the caller should read and act on.
+            reply(rid, {"content": [{"type": "text", "text": str(e)}], "isError": True})
+        except Exception as e:                        # noqa: BLE001
+            log(f"unhandled error in {name}: {e!r}")
+            reply(rid, {
+                "content": [{"type": "text", "text": f"internal error in {name}: {e}"}],
+                "isError": True,
+            })
+
+    elif method == "resources/list":
+        reply(rid, {"resources": RESOURCES})
+
+    elif method == "resources/read":
+        uri = params.get("uri", "")
+        try:
+            text, mime = read_resource(uri)
+            reply(rid, {"contents": [{"uri": uri, "mimeType": mime, "text": text}]})
+        except ToolError as e:
+            reply_error(rid, -32602, str(e))
+
+    else:
+        reply_error(rid, -32601, f"method not found: {method}")
+
+
+def main():
+    if "--selftest" in sys.argv:
+        return selftest()
+    if "--tools" in sys.argv:
+        for t in TOOLS:
+            print(f"{t['name']:22} {t['description'].splitlines()[0]}")
+        return 0
+
+    log(f"serving {len(TOOLS)} tools and {len(RESOURCES)} resources from {REPO}")
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError as e:
+            log(f"malformed message dropped: {e}")
+            continue
+        try:
+            handle(msg)
+        except Exception as e:                        # noqa: BLE001
+            log(f"handler crashed: {e!r}")
+            if msg.get("id") is not None:
+                reply_error(msg["id"], -32603, f"internal error: {e}")
+    log("stdin closed, exiting")
+    return 0
+
+
+def selftest():
+    """Exercise the protocol without a client. Prints a report to stderr."""
+    ok = True
+
+    def check(label, cond, detail=""):
+        nonlocal ok
+        print(f"{'PASS' if cond else 'FAIL'}  {label}" + (f"  {detail}" if detail else ""),
+              file=sys.stderr)
+        ok = ok and cond
+
+    check("tools.toml parses and declares tools", len(TOOLS) > 0, f"{len(TOOLS)} tools")
+    check("every declared tool has a handler", not (TOOL_NAMES - set(HANDLERS)))
+    check("no handler lacks a declaration", not (set(HANDLERS) - TOOL_NAMES))
+    check("every inputSchema is a JSON object schema",
+          all(t["inputSchema"].get("type") == "object" for t in TOOLS))
+    check("forge script is executable", os.access(FORGE, os.X_OK), str(FORGE))
+
+    # Identifier validation must reject argument injection.
+    for bad in ["--help", "-x", "../etc/passwd", "a;b", "a b", "", "a" * 80]:
+        try:
+            check_id(bad, "probe")
+            check(f"rejects unsafe id {bad!r}", False)
+        except ToolError:
+            check(f"rejects unsafe id {bad!r}", True)
+    try:
+        check_id("T-0002", "probe")
+        check("accepts a real id 'T-0002'", True)
+    except ToolError:
+        check("accepts a real id 'T-0002'", False)
+
+    # A read-only tool should work against the live repository.
+    try:
+        text, data = t_roadmap_read({})
+        check("roadmap_read returns structured objectives", isinstance(data, list) and len(data) > 0,
+              f"{len(data) if isinstance(data, list) else 0} objective(s)")
+    except ToolError as e:
+        check("roadmap_read returns structured objectives", False, str(e))
+
+    print(file=sys.stderr)
+    print("selftest: PASSED" if ok else "selftest: FAILED", file=sys.stderr)
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -462,7 +462,7 @@ footer { border-top: var(--rule-w) solid var(--rule); padding-block: 2.6rem 3.4r
     <div class="chips">
       <span class="chip"><span class="dot dot--live"></span>Kernel boots on aarch64 · 191 bytes</span>
       <span class="chip"><span class="dot dot--hold"></span>Two merges refused so far</span>
-      <span class="chip"><span class="dot dot--off"></span>Very early — see the roadmap</span>
+      <span class="chip"><span class="dot dot--live"></span>Agent protocol live locally · 10 tools</span>
     </div>
   </div>
 </header>
@@ -1038,8 +1038,8 @@ footer { border-top: var(--rule-w) solid var(--rule); padding-block: 2.6rem 3.4r
         <div class="koma-role" style="margin-bottom:.9rem">Governance track</div>
         <div class="track">
           <div class="leg leg--done"><span class="leg-id">G0</span><div><div class="leg-t">Foundations</div><div class="leg-d">Constitution, roadmap, roles, the ten-condition gate. Running.</div></div></div>
-          <div class="leg leg--now"><span class="leg-id">G1</span><div><div class="leg-t">Local protocol</div><div class="leg-d">The contribution surface served over MCP. Same API the world will use.</div></div></div>
-          <div class="leg"><span class="leg-id">G2</span><div><div class="leg-t">The Guardian</div><div class="leg-d">Panel, quorum, verdicts and reasoning published to the ledger.</div></div></div>
+          <div class="leg leg--done"><span class="leg-id">G1</span><div><div class="leg-t">Local protocol</div><div class="leg-d">The contribution surface served over MCP, ten tools, running today. Same API the world will use.</div></div></div>
+          <div class="leg leg--now"><span class="leg-id">G2</span><div><div class="leg-t">The Guardian</div><div class="leg-d">Panel of three, quorum, verdicts and reasoning published. Ruling on contributions now.</div></div></div>
           <div class="leg"><span class="leg-id">G3</span><div><div class="leg-t">This site, and the vote</div><div class="leg-d">Public record, readable roadmap, and the monthly vote opens to anyone verified.</div></div></div>
           <div class="leg"><span class="leg-id">G4</span><div><div class="leg-t">Open to the world</div><div class="leg-d">Public endpoint. Signed identities, quarantine, sandboxed CI, reputation.</div></div></div>
         </div>
@@ -1196,10 +1196,15 @@ Boot test — profile 'standard'
     }
   }
 }</div>
-          <p class="small" style="margin-top:.7rem"><strong>Being straight with you:</strong> that
-            server is milestone G1 and is not written yet. What exists today is every one of its
-            operations as a script — same names, same behaviour — so the server will be a thin
-            wrapper rather than a rewrite. Until it ships, use the commands in step 3.</p>
+          <p class="small" style="margin-top:.7rem">This server exists and works today, over
+            standard input and output, on your own machine. It is a thin wrapper: every operation is
+            carried out by the same script a human would run, so there is one implementation to audit
+            rather than two that can drift apart.</p>
+          <p class="small" style="margin-top:.7rem"><strong>What does not exist yet</strong> is the
+            public endpoint — the one an agent anywhere in the world reaches over the network, with
+            signed identities, submissions held in quarantine, and untrusted code compiled inside a
+            sealed container. That is milestone G4. Until then you run the server locally against
+            your own copy.</p>
         </div>
       </div>
 

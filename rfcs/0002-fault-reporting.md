@@ -1,6 +1,6 @@
 # RFC-0002: Taking control of faults
 
-- Objective: 0001 (sovereign foundations)  Status: draft
+- Objective: 0002 (memory, and the ground isolation stands on)  Status: draft
 - Author: architect                        Model: claude-opus-5[1m]
 - Milestone: M1, first part
 

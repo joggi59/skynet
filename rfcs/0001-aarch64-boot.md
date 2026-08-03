@@ -273,7 +273,7 @@ pub fn kernel_main<C: Console, P: Power>(mut res: BootResources<C, P>) -> ! {
 }
 ```
 
-That is the entire portable kernel at M0. No globals, no statics, no initialisation phase, and no way
+That is the entire portable kernel at M0. No globals, no initialisation phase, and no way
 to obtain a device it was not given.
 
 `no_std` costs exactly two items: `#![no_std]` swaps the `std` prelude for `core`, and `#![no_main]`
@@ -560,7 +560,25 @@ recurse" grants no authority to anything: it is not a capability, cannot be read
 and cannot be reached outside the panic path.
 
 The claim in §2 therefore narrows honestly, from "the kernel has no statics" to "the kernel has one
-static, in the failure path, and here is why it earns its place". A reviewer may reasonably prefer
+static, in the failure path, and here is why it earns its place".
+
+**And the narrowing has to reach every place the old claim was made.** The first attempt at this
+amendment changed §4 and left the invariant-1 section still saying "no `static` anywhere", still
+listing "no atomic already-taken flag" among what the design does not contain, and left conformance
+criterion C9 demanding "no `static` of any kind" — a criterion the merged tree violates, enforced by
+a reviewer rather than a script, which is the same mechanism that missed the reach-around this
+amendment exists to close.
+
+Three agents found it independently. It is worth naming as a pattern rather than a slip: a partial
+amendment leaves the specification asserting something the code contradicts, and the assertion looks
+exactly like a requirement until someone checks. That is the same failure as prose overclaiming what
+code enforces, one level up — in the document authorising the repair.
+
+**What zero statics was actually worth.** It was credited as evidence that ownership does at M0 what
+a capability will do at M4. It was not that. The merged M0 had zero statics *and* a nullary
+crate-visible constructor for the authority to power the machine off — the property doing the work
+was visibility, and nobody measured it. Spending an overvalued proxy to buy the property it was
+mistakenly credited with is a better trade than this section originally claimed. A reviewer may reasonably prefer
 proving the path panic-free instead. That argument needs to show the property holds for every future
 edit, not for today's code, which is the harder claim.
 
@@ -869,7 +887,8 @@ structures that make it unreachable.
 - No `static` or `static mut` anywhere in `kernel/src`, including `arch/`. Linker symbols are
   referenced from assembly, not declared as Rust statics, which is why the count is zero and not
   "zero except three".
-- No lazily-initialised singleton, no `Once`, no atomic "already taken" flag. Those are globals with
+- No lazily-initialised singleton, no `Once`, no atomic "already taken" flag *guarding device
+  creation*. Those are globals with
   a guard, and the guard is not the part invariant 1 objects to.
 - No accessor of the form `arch::console()` or `Platform::current()`, and no free function such as
   `arch::console_write_byte` or `arch::shutdown`. There is no function anywhere that returns
@@ -919,7 +938,9 @@ that matters:
   caller passes `PANIC_MARKER` and there is no second caller;
 - it is not a `Console` and does not implement `Console`, so it cannot be used for ordinary output;
 - it never returns, so nothing can be built on top of it;
-- there is still no `static`, no accessor and no namespace to walk. Nothing *reaches* authority
+- there is exactly one `static` — the failure path's re-entrancy guard, which holds one bit, is
+  private to its module, and grants nothing — and no accessor and no namespace to walk. Nothing
+  *reaches* authority
   through it; it does one terminal thing.
 
 The case against it, which a reviewer is entitled to press: it establishes that kernel code may
@@ -1005,7 +1026,7 @@ All identifiers, comments and documents in English.
 
 **Mechanical — additional, checkable by anyone with a shell.**
 
-- C9. `grep -rn 'static mut' kernel/src` is empty, and no `static` item of any kind exists in the
+- C9. `grep -rn 'static mut' kernel/src` is empty, and exactly ONE `static` item exists in the
   kernel (`const` declarations are not statics and are permitted).
 - C10. `grep -rn 'target_arch' kernel/src kernel/build.rs` returns exactly two locations:
   `kernel/src/arch/mod.rs` and `kernel/build.rs` (as `CARGO_CFG_TARGET_ARCH`).

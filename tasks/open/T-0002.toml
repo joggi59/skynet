@@ -1,0 +1,152 @@
+[task]
+id = "T-0002"
+title = "Boot on aarch64 under QEMU virt, per the rewritten RFC-0001"
+rfc = "0001"
+objective = "0001"
+state = "open"
+estimated_difficulty = "medium"
+profile = "standard"
+supersedes = "T-0001"
+
+statement = """
+Bring the kernel up on QEMU virt: enter at _start, mask interrupts, zero .bss,
+set a stack, configure SCTLR_EL1, hand two owned device tokens to a generic
+portable kernel_main, write the boot marker, and shut the machine down through
+PSCI.
+
+This supersedes T-0001. RFC-0001 was rewritten after T-0001 was issued, into a
+materially different design, and two reviewers rejected the T-0001 patch on
+grounds the new design fixes. Do not reuse the old implementation: read the RFC.
+
+The three decisions the RFC spends its budget on, and that this task exists to
+protect:
+
+  1. The HAL is a TRAIT CONTRACT with a compile-time conformance proof, not a
+     module of free functions. A module's contract is defined by whoever calls
+     it, so it silently equals "whatever M0 happened to need" and a second port
+     satisfies it by accident.
+
+  2. Devices are OWNED VALUES with private fields and unsafe constructors,
+     minted at exactly one call site. Zero `static` items in the kernel. Power
+     is consumed by `off(self)`. Ownership is doing at M0 what a capability will
+     do at M4.
+
+  3. The failure path gets the NARROWEST authority that works, not the most
+     convenient. `FailStop::fail_stop(bytes) -> !` writes one compile-time
+     constant and stops. It is not a Console and must never become one. No
+     print! macro, no core::fmt, no PanicInfo on the wire.
+"""
+
+[task.acceptance]
+criteria = [
+    "ci/build.sh exits 0",
+    "ci/build.sh --lint reports zero clippy warnings",
+    "ci/boot-test.sh finds SKYNET_BOOT_OK, does not find SKYNET_PANIC, and QEMU exits 0",
+    "SKYNET_PROFILE=nano ci/build.sh --size is within the 192 KiB budget (the tightest profile, not the default)",
+    "ci/constitution-check.sh --check hal-boundary passes",
+    "ci/constitution-check.sh --check no-kernel-deps passes",
+    "kernel/Cargo.lock resolves exactly one package, and is committed",
+    "the built binary is named skynet-kernel",
+    "readelf -S shows no allocated PROGBITS section placed after .bss (an orphan section reintroduces objcopy padding)",
+    "REVIEW: hal.rs names no register, address, instruction, architecture or cfg; the const conformance block is present and would fail to compile against an incomplete port",
+    "REVIEW: the kernel contains zero `static` items; grep the tree and say so explicitly",
+    "REVIEW: every unsafe block carries a // SAFETY: comment stating an invariant actually upheld on every path reaching it",
+    "REVIEW: fail_stop is the only place outside boot_rust that mints a device, and it cannot be used for ordinary output",
+]
+
+[task.scope]
+touches = [
+    "kernel/Cargo.toml",
+    "kernel/Cargo.lock",
+    "kernel/build.rs",
+    "kernel/src/main.rs",
+    "kernel/src/hal.rs",
+    "kernel/src/panic.rs",
+    "kernel/src/arch/mod.rs",
+    "kernel/src/arch/aarch64/mod.rs",
+    "kernel/src/arch/aarch64/boot.rs",
+    "kernel/src/arch/aarch64/platform.rs",
+    "kernel/src/arch/aarch64/pl011.rs",
+    "kernel/src/arch/aarch64/psci.rs",
+    "kernel/src/arch/aarch64/cpu.rs",
+    "kernel/src/arch/aarch64/fail.rs",
+    "kernel/src/arch/aarch64/link.ld",
+]
+does_not_touch = [
+    "ci/                — the implementer may not edit the checks that judge it",
+    "rfcs/              — the design is settled; if it is wrong, release the task",
+    "roadmap/, governance/, CONSTITUTION.md, constitution.toml",
+    ".provenance/       — the ledger is written by the gate, never by a contributor",
+    "kernel/.cargo/     — cargo does not read it from CI; anything affecting the artefact belongs in build.rs",
+    "kernel/kernel.ld   — the linker script moved under arch/; a hardware address at the crate root was a blocking finding",
+]
+
+[task.constitutional]
+at_risk = [
+    "6 — HAL boundary: exactly two places may name an architecture, arch/mod.rs and build.rs. The linker script holds addresses and therefore lives under arch/aarch64/, which the mechanical check cannot see — a reviewer enforces it",
+    "7 — no kernel dependencies: no [dependencies], [build-dependencies] or [dev-dependencies] sections at all, not even empty ones. build.rs uses host std, which ships nothing into the image",
+    "4 — frugality: nano's 192 KiB binds. --nmagic is not optional; without it LLD's 64 KiB segment alignment makes objcopy emit over 128 KiB of padding",
+    "1 — no ambient authority (pending, M4): zero statics, owned tokens, one minting site plus the documented failure path",
+    "5 — zero telemetry (pending, M6): the panic path writes a compile-time constant and never PanicInfo",
+]
+
+[task.notes]
+hints = """
+Two blocking findings killed T-0001. Both are fixed by the RFC's design, and
+neither was the implementer's fault — the old spec prescribed them:
+
+  reviewer-safety      the PSCI safety comment claimed "no EL2" while the same
+                       patch added an EL2->EL1 drop that falsifies it. RFC O-3
+                       is now CLOSED: EL1 only, park on anything else. Do not
+                       reintroduce the drop.
+
+  reviewer-constitution kernel/kernel.ld carried `. = 0x40080000;` — a hardware
+                       address outside kernel/src/arch/. The script now lives at
+                       kernel/src/arch/aarch64/link.ld and build.rs points at it.
+
+Verified on this toolchain, so you do not have to rediscover it:
+
+  #[unsafe(naked)] + core::arch::naked_asm! compile on stable rustc 1.97.1,
+  edition 2024. No nightly, no build-std.
+
+  cargo does NOT read kernel/.cargo/config.toml when invoked as
+  `cargo build --manifest-path kernel/Cargo.toml` from the repository root,
+  which is exactly how ci/build.sh invokes it. Confirmed empirically: a linker
+  key placed there was honoured from inside kernel/ and silently ignored from
+  the parent. Anything affecting the artefact goes in build.rs, which gets an
+  absolute path from CARGO_MANIFEST_DIR.
+
+QEMU virt facts:
+
+  RAM base       0x40000000     link at 0x40080000
+  PL011 UART0    0x09000000     DR at +0x000, FR at +0x018, TXFF is bit 5
+  entry EL       EL1            (virt defaults to virtualization=off: no EL2 exists)
+  entry regs     ALL ZERO       x0 is NOT a device tree pointer for an ELF image —
+                                QEMU treats ELF as non-Linux, never writes the
+                                bootloader stub, and resets every GPR. RFC O-2.
+  PSCI           HVC conduit, SYSTEM_OFF = 0x84000008
+
+Traps:
+
+  Poll FR.TXFF before writing DR. A blind write is correct only while the FIFO
+  has room; the failure is silent truncation at an unpredictable length.
+
+  No options(noreturn) on the PSCI hvc — firmware that does not implement
+  SYSTEM_OFF returns NOT_SUPPORTED. Fall through to Processor::halt().
+
+  Do not use a bare `loop {}` — clippy::empty_loop fails under -D warnings.
+  Use wfi.
+
+  Every NOBITS section must be last in the linker script. objcopy -O binary
+  skips NOBITS but pads across them if a loadable section follows at a higher
+  address, so an orphan section after .bss turns a 64 KiB stack into 64 KiB of
+  image. Place .got explicitly for the same reason and check with readelf -S.
+
+  If the link reports undefined memcpy/memset/memcmp, write them in a portable
+  kernel/src/mem.rs. Never reach for a crate. compiler_builtins normally
+  provides them as weak symbols, so this is not expected to be needed.
+
+RFC-0001's Non-goals are binding: no exception vectors, no MMU, no interrupts,
+no device tree parsing, no UART initialisation, no second architecture, no real
+hardware, no performance work.
+"""

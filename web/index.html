@@ -1,1498 +1,810 @@
-<title>SKYNET — an OS built by agents, governed by humans</title>
+<title>SKYNET — an operating system written by AI, steered by people</title>
 
 <style>
-/* ═══════════════════════════════════════════════════════════════
-   SKYNET — manga print aesthetic
-   sumi ink · washi paper · vermilion · indigo · gold
-   Hard shadows only. Manga has no blur.
-   ═══════════════════════════════════════════════════════════════ */
-
 :root {
-  --sumi:      #17120E;
-  --washi:     #FCF7EC;
-  --shu:       #E33127;
-  --ai:        #17457F;
-  --yamabuki:  #F0A81E;
-  --sakura:    #EE6E86;
+  --sumi: #17120E; --washi: #FCF7EC;
+  --shu: #E33127; --ai: #17457F; --yamabuki: #F0A81E;
 
-  --ground:    var(--washi);
-  --ink:       var(--sumi);
-  --stone:     #8A7F76;
-  --stone-dim: #B6ADA3;
-  --panel:     #FFFDF8;
-  --tone:      rgba(23,18,14,.16);
-  --rule:      var(--sumi);
-  --rule-w:    3px;
-
-  --shadow:    6px 6px 0 var(--sumi);
-  --shadow-sm: 3px 3px 0 var(--sumi);
+  --ground: var(--washi); --ink: var(--sumi);
+  --stone: #8A7F76; --stone-dim: #B6ADA3;
+  --panel: #FFFDF8; --tone: rgba(23,18,14,.15);
+  --rule: var(--sumi); --rule-w: 3px;
+  --shadow: 6px 6px 0 var(--sumi); --shadow-sm: 3px 3px 0 var(--sumi);
 
   --display: ui-sans-serif, system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --body:    ui-sans-serif, system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --mono:    ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Consolas, monospace;
-
-  --measure: 66ch;
-  --gap: clamp(1.25rem, 3vw, 2.5rem);
+  --mono: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Consolas, monospace;
+  --measure: 62ch;
+  --gap: clamp(1.2rem, 2.6vw, 2.2rem);
 }
-
 @media (prefers-color-scheme: dark) {
-  :root {
-    --ground: #100C0A; --ink: #F5EEE2; --stone: #9A8E82; --stone-dim: #6B6058;
-    --panel: #1B1512; --tone: rgba(245,238,226,.13); --rule: #F5EEE2;
-    --shu: #FF4A3D; --ai: #5B93D6; --yamabuki: #FFC24D; --sakura: #FF8FA0;
-    --shadow: 6px 6px 0 #F5EEE2; --shadow-sm: 3px 3px 0 #F5EEE2;
-  }
+  :root { --ground:#100C0A; --ink:#F5EEE2; --stone:#9A8E82; --stone-dim:#6B6058;
+    --panel:#1B1512; --tone:rgba(245,238,226,.12); --rule:#F5EEE2;
+    --shu:#FF4A3D; --ai:#5B93D6; --yamabuki:#FFC24D;
+    --shadow:6px 6px 0 #F5EEE2; --shadow-sm:3px 3px 0 #F5EEE2; }
 }
-:root[data-theme="dark"] {
-  --ground: #100C0A; --ink: #F5EEE2; --stone: #9A8E82; --stone-dim: #6B6058;
-  --panel: #1B1512; --tone: rgba(245,238,226,.13); --rule: #F5EEE2;
-  --shu: #FF4A3D; --ai: #5B93D6; --yamabuki: #FFC24D; --sakura: #FF8FA0;
-  --shadow: 6px 6px 0 #F5EEE2; --shadow-sm: 3px 3px 0 #F5EEE2;
-}
-:root[data-theme="light"] {
-  --ground: #FCF7EC; --ink: #17120E; --stone: #8A7F76; --stone-dim: #B6ADA3;
-  --panel: #FFFDF8; --tone: rgba(23,18,14,.16); --rule: #17120E;
-  --shu: #E33127; --ai: #17457F; --yamabuki: #F0A81E; --sakura: #EE6E86;
-  --shadow: 6px 6px 0 #17120E; --shadow-sm: 3px 3px 0 #17120E;
-}
+:root[data-theme="dark"] { --ground:#100C0A; --ink:#F5EEE2; --stone:#9A8E82; --stone-dim:#6B6058;
+  --panel:#1B1512; --tone:rgba(245,238,226,.12); --rule:#F5EEE2;
+  --shu:#FF4A3D; --ai:#5B93D6; --yamabuki:#FFC24D;
+  --shadow:6px 6px 0 #F5EEE2; --shadow-sm:3px 3px 0 #F5EEE2; }
+:root[data-theme="light"] { --ground:#FCF7EC; --ink:#17120E; --stone:#8A7F76; --stone-dim:#B6ADA3;
+  --panel:#FFFDF8; --tone:rgba(23,18,14,.15); --rule:#17120E;
+  --shu:#E33127; --ai:#17457F; --yamabuki:#F0A81E;
+  --shadow:6px 6px 0 #17120E; --shadow-sm:3px 3px 0 #17120E; }
 
 * { box-sizing: border-box; }
-
 body {
-  margin: 0;
-  background: var(--ground);
-  color: var(--ink);
-  font-family: var(--body);
-  font-size: clamp(1rem, .95rem + .25vw, 1.115rem);
-  line-height: 1.62;
-  -webkit-font-smoothing: antialiased;
-  overflow-x: hidden;
+  margin: 0; background: var(--ground); color: var(--ink);
+  font-family: var(--display); font-size: clamp(1.02rem,.97rem + .3vw,1.16rem);
+  line-height: 1.62; -webkit-font-smoothing: antialiased; overflow-x: hidden;
 }
+.tone { background-image: radial-gradient(var(--tone) 1.4px, transparent 1.5px); background-size: 7px 7px; }
+.wrap { width: min(1080px, 92vw); margin-inline: auto; }
 
-/* screentone — the manga halftone, as a dot lattice */
-.tone {
-  background-image: radial-gradient(var(--tone) 1.4px, transparent 1.5px);
-  background-size: 7px 7px;
-}
+h1,h2,h3 { text-wrap: balance; margin: 0; }
+h1 { font-weight:900; font-size:clamp(3.4rem,12vw,8.5rem); line-height:.85;
+     letter-spacing:-.045em; text-transform:uppercase; text-shadow:.05em .05em 0 var(--shu); }
+h2 { font-weight:900; font-size:clamp(1.9rem,4.6vw,3.2rem); line-height:1.02; letter-spacing:-.033em; }
+h3 { font-weight:800; font-size:clamp(1.05rem,1.8vw,1.28rem); line-height:1.24; letter-spacing:-.015em; }
 
-.wrap { width: min(1180px, 92vw); margin-inline: auto; }
-.narrow { max-width: var(--measure); }
-
-/* ── type ─────────────────────────────────────────────────── */
-
-h1, h2, h3 { font-family: var(--display); text-wrap: balance; margin: 0; }
-
-h1 {
-  font-weight: 900;
-  font-size: clamp(3.6rem, 13vw, 9.5rem);
-  line-height: .84;
-  letter-spacing: -.045em;
-  text-transform: uppercase;
-  text-shadow: .055em .055em 0 var(--shu);
-}
-h2 {
-  font-weight: 900;
-  font-size: clamp(1.85rem, 4.4vw, 3.1rem);
-  line-height: 1.02;
-  letter-spacing: -.032em;
-}
-h3 {
-  font-weight: 800;
-  font-size: clamp(1.06rem, 1.9vw, 1.32rem);
-  line-height: 1.22;
-  letter-spacing: -.015em;
-}
-
-p { margin: 0 0 1.05em; max-width: var(--measure); }
+p { margin: 0 0 1em; max-width: var(--measure); }
 p:last-child { margin-bottom: 0; }
-strong { font-weight: 750; }
-a { color: inherit; text-underline-offset: .18em; text-decoration-thickness: 2px; }
-a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
-  outline: 3px solid var(--shu); outline-offset: 3px;
-}
+a { color: inherit; text-underline-offset:.18em; text-decoration-thickness:2px; }
+a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible
+  { outline: 3px solid var(--shu); outline-offset: 3px; }
 
-/* section marker: a brush stroke, drawn, no words needed */
-.mark { display: flex; align-items: center; gap: .85rem; margin-bottom: 1rem; }
-.mark svg { flex: none; width: 62px; height: 22px; }
-.mark span {
-  font-family: var(--mono); font-size: .69rem; letter-spacing: .22em;
-  text-transform: uppercase; color: var(--stone);
-}
+section { padding-block: clamp(3rem, 7vw, 5.5rem); }
+.stack { display:flex; flex-direction:column; gap: var(--gap); }
+.grid { display:grid; gap:var(--gap); }
+.g2 { grid-template-columns: repeat(auto-fit, minmax(300px,1fr)); }
 
-.lede { font-size: clamp(1.1rem, 1.5vw, 1.28rem); line-height: 1.52; }
-.plain {
-  font-size: clamp(1.02rem, 1.3vw, 1.14rem); line-height: 1.6;
-  max-width: 58ch; color: var(--ink);
-}
-.free-banner {
-  display: flex; gap: 1rem; align-items: flex-start;
-  border: var(--rule-w) solid var(--rule); background: var(--panel);
-  box-shadow: var(--shadow-sm); padding: 1rem 1.15rem; margin-top: 1.6rem;
-  max-width: 62ch;
-}
-.free-banner svg { flex: none; margin-top: .15rem; }
-.free-banner strong { display: block; font-size: 1.02rem; margin-bottom: .25rem; }
-.free-banner span { font-size: .87rem; line-height: 1.5; color: var(--stone); display: block; }
-.small { font-size: .87rem; line-height: 1.5; color: var(--stone); max-width: 62ch; }
+.eyebrow { font-family:var(--mono); font-size:.7rem; letter-spacing:.26em;
+           text-transform:uppercase; color:var(--stone); margin-bottom:1rem; }
+.big { font-size:clamp(1.18rem,2vw,1.5rem); line-height:1.44; max-width:34ch; font-weight:600; }
+.plain { font-size:clamp(1.04rem,1.3vw,1.16rem); line-height:1.6; max-width:56ch; }
+.small { font-size:.87rem; line-height:1.52; color:var(--stone); max-width:58ch; }
+.panel { border:var(--rule-w) solid var(--rule); background:var(--panel);
+         box-shadow:var(--shadow); padding:clamp(1.1rem,2.4vw,1.9rem); }
 
-/* ── panels ───────────────────────────────────────────────── */
-
-.panel {
-  border: var(--rule-w) solid var(--rule);
-  background: var(--panel);
-  box-shadow: var(--shadow);
-  padding: clamp(1.15rem, 2.6vw, 2rem);
-}
-.panel--flat { box-shadow: none; }
-
-section { padding-block: clamp(3.2rem, 8vw, 6rem); }
-.stack { display: flex; flex-direction: column; gap: var(--gap); }
+/* section marker: a drawn brush stroke */
+.mark { display:flex; align-items:center; gap:.85rem; margin-bottom:.9rem; }
+.mark svg { flex:none; width:56px; height:20px; }
+.mark span { font-family:var(--mono); font-size:.68rem; letter-spacing:.2em;
+             text-transform:uppercase; color:var(--stone); }
 
 /* ── hero ─────────────────────────────────────────────────── */
+.hero { position:relative; padding-block:clamp(2.8rem,8vw,5.5rem) clamp(2rem,5vw,3.5rem); overflow:hidden; }
+#lines { position:absolute; inset:0; width:100%; height:100%; z-index:0; pointer-events:none; }
+.hero .wrap { position:relative; z-index:1; }
+.thesis { margin-top:clamp(1.4rem,3vw,2.2rem); border-left:8px solid var(--shu);
+          padding-left:clamp(.9rem,2.2vw,1.5rem); }
 
-.hero { position: relative; padding-block: clamp(3rem, 9vw, 6.5rem) clamp(2.5rem, 6vw, 4rem); overflow: hidden; }
-#lines { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none; }
-.hero .wrap { position: relative; z-index: 1; }
+/* ── the honest status table ──────────────────────────────── */
+.status { border:var(--rule-w) solid var(--rule); box-shadow:var(--shadow); background:var(--panel); }
+.st-row { display:grid; grid-template-columns:1fr 10.5rem; gap:1rem; align-items:center;
+          padding:.85rem clamp(.9rem,2vw,1.4rem); border-bottom:2px solid var(--stone-dim); }
+.st-row:last-child { border-bottom:0; }
+.st-row > span:first-child { font-size:.98rem; line-height:1.4; }
+.badge { font-family:var(--mono); font-size:.68rem; letter-spacing:.09em; text-transform:uppercase;
+         text-align:center; padding:.3rem .5rem; border:2px solid var(--rule); font-weight:700; }
+.b-yes  { background:var(--ai);       color:#FFF; border-color:var(--ai); }
+.b-now  { background:var(--yamabuki); color:#17120E; }
+.b-no   { background:transparent;     color:var(--stone); border-color:var(--stone-dim); }
+.b-far  { background:transparent;     color:var(--stone); border-style:dashed; border-color:var(--stone-dim); }
 
-.eyebrow {
-  font-family: var(--mono); font-size: .7rem; letter-spacing: .3em;
-  text-transform: uppercase; color: var(--stone); margin-bottom: 1.1rem;
-}
-.thesis {
-  margin-top: clamp(1.6rem, 3.5vw, 2.4rem);
-  border-left: 8px solid var(--shu);
-  padding-left: clamp(1rem, 2.4vw, 1.7rem);
-  font-size: clamp(1.16rem, 2.1vw, 1.6rem);
-  line-height: 1.42; font-weight: 600; max-width: 34ch;
-}
+/* ── the loop: how it works ───────────────────────────────── */
+.loop { display:grid; gap:0; border:var(--rule-w) solid var(--rule); box-shadow:var(--shadow); }
+.lp { display:grid; grid-template-columns:auto auto 1fr; gap:clamp(.9rem,2.2vw,1.5rem);
+      align-items:start; padding:clamp(1rem,2.2vw,1.5rem); background:var(--panel);
+      border-bottom:var(--rule-w) solid var(--rule); }
+.lp:last-child { border-bottom:0; }
+.lp-n { font-weight:900; font-size:clamp(1.4rem,3vw,2rem); line-height:1; padding:.35rem .6rem;
+        font-variant-numeric:tabular-nums; align-self:stretch; display:flex; align-items:center; }
+.lp-who { font-family:var(--mono); font-size:.63rem; letter-spacing:.15em; text-transform:uppercase;
+          color:var(--stone); margin-bottom:.3rem; }
+.lp figure { margin:0; width:clamp(46px,7vw,62px); }
+.lp figure svg { width:100%; height:auto; }
+.lp p { font-size:.95rem; line-height:1.5; margin:0; }
+.lp--human .lp-n { background:var(--ai);       color:#FFF; }
+.lp--agent .lp-n { background:var(--yamabuki); color:#17120E; }
+.lp--gate  .lp-n { background:var(--shu);      color:#FFF; }
+.tag { display:inline-block; font-family:var(--mono); font-size:.6rem; letter-spacing:.14em;
+       text-transform:uppercase; padding:.16rem .42rem; margin-left:.5rem; border:2px solid currentColor; }
 
-.chips { display: flex; flex-wrap: wrap; gap: .55rem; margin-top: 1.8rem; }
-.chip {
-  font-family: var(--mono); font-size: .72rem; letter-spacing: .06em;
-  border: 2px solid var(--rule); padding: .34rem .7rem; background: var(--panel);
-  display: inline-flex; align-items: center; gap: .45rem;
-}
-.dot { width: .5rem; height: .5rem; border-radius: 50%; flex: none; }
-.dot--live { background: var(--shu); }
-.dot--hold { background: var(--yamabuki); }
-.dot--off  { background: var(--stone-dim); }
+/* ── everyday protections ─────────────────────────────────── */
+.prot { border:var(--rule-w) solid var(--rule); background:var(--panel); box-shadow:var(--shadow-sm);
+        padding:1.15rem; display:flex; flex-direction:column; gap:.6rem; }
+.prot figure { margin:0; height:64px; display:grid; place-items:center; }
+.prot figure svg { height:100%; width:auto; }
+.prot p { font-size:.9rem; line-height:1.5; margin:0; }
+.prot .vs { font-size:.83rem; color:var(--stone); border-top:2px dashed var(--stone-dim); padding-top:.55rem; }
 
-/* ── grids ────────────────────────────────────────────────── */
-
-.grid { display: grid; gap: var(--gap); }
-.g2 { grid-template-columns: repeat(auto-fit, minmax(310px, 1fr)); }
-.g4 { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
-
-/* ── illustrated primitive cards ──────────────────────────── */
-
-.prim-card {
-  border: var(--rule-w) solid var(--rule); background: var(--panel);
-  box-shadow: var(--shadow-sm); padding: 1.1rem;
-  display: flex; flex-direction: column; gap: .7rem;
-}
-.prim-card figure { margin: 0; display: grid; place-items: center; padding: .3rem 0 .1rem; }
-.prim-card svg { width: 100%; max-width: 132px; height: auto; }
-.prim-card h3 { font-size: 1.02rem; }
-.prim-card .prim-who {
-  font-family: var(--mono); font-size: .62rem; letter-spacing: .15em;
-  text-transform: uppercase; color: var(--stone);
-}
-.prim-card p { font-size: .87rem; line-height: 1.48; margin: 0; }
-.prim-card .you { color: var(--shu); font-weight: 700; }
-
-/* ── everyday stories ─────────────────────────────────────── */
-
-.story {
-  display: grid; grid-template-columns: auto 1fr; gap: 1.1rem; align-items: start;
-  border: var(--rule-w) solid var(--rule); background: var(--panel);
-  box-shadow: var(--shadow-sm); padding: 1.2rem;
-}
-.story-n {
-  font-family: var(--display); font-weight: 900; font-size: 1.5rem; line-height: 1;
-  background: var(--rule); color: var(--ground); padding: .4rem .55rem;
-  font-variant-numeric: tabular-nums;
-}
-.story h3 { margin-bottom: .55rem; }
-.story p { font-size: .93rem; line-height: 1.55; margin-bottom: .7rem; }
-.story p:last-child { margin-bottom: 0; }
-.story-today {
-  font-size: .84rem !important; color: var(--stone);
-  border-top: 2px dashed var(--stone-dim); padding-top: .6rem;
-}
-.story-today strong { color: var(--ink); }
-
-/* ── numbered steps ───────────────────────────────────────── */
-
-.steps { display: grid; gap: var(--gap); }
-.step {
-  display: grid; grid-template-columns: auto 1fr; gap: 1.2rem; align-items: start;
-  border: var(--rule-w) solid var(--rule); background: var(--panel);
-  box-shadow: var(--shadow-sm); padding: 1.3rem;
-}
-.step-n {
-  font-family: var(--display); font-weight: 900; font-size: 1.7rem; line-height: 1;
-  background: var(--shu); color: #FFF; padding: .45rem .7rem;
-  font-variant-numeric: tabular-nums;
-}
-.step h3 { margin-bottom: .5rem; }
-
-/* ── contribution paths ───────────────────────────────────── */
-
-.path {
-  border: var(--rule-w) solid var(--rule); background: var(--panel);
-  box-shadow: var(--shadow-sm); padding: 1.3rem;
-}
-.path--wide { border-left: 8px solid var(--ai); }
-.path-tag {
-  display: inline-block; font-family: var(--mono); font-size: .64rem;
-  letter-spacing: .17em; text-transform: uppercase;
-  background: var(--shu); color: #FFF; padding: .22rem .55rem; margin-bottom: .8rem;
-}
-.path--wide .path-tag { background: var(--ai); }
-.path h3 { margin-bottom: .6rem; }
-.path p { font-size: .93rem; line-height: 1.55; }
-.path ul { margin: .3rem 0 .9rem; padding-left: 1.1rem; font-size: .93rem; line-height: 1.55; }
-.path li { margin-bottom: .35rem; }
-
-/* ── device ladder ────────────────────────────────────────── */
-
-.ladder { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0;
-          border: var(--rule-w) solid var(--rule); box-shadow: var(--shadow); }
-.rung { border-right: var(--rule-w) solid var(--rule); background: var(--panel);
-        padding: 1.1rem 1rem; display: flex; flex-direction: column; gap: .55rem; }
-.rung:last-child { border-right: 0; }
-.rung figure { margin: 0; height: 84px; display: grid; place-items: center; }
-.rung svg { height: 100%; width: auto; }
-.rung h3 { font-size: .98rem; }
-.rung .budget {
-  font-family: var(--mono); font-size: .72rem; color: var(--shu); font-weight: 700;
-  font-variant-numeric: tabular-nums;
-}
-.rung p { font-size: .81rem; line-height: 1.42; color: var(--stone); margin: 0; }
-
-/* ── yonkoma: the four-panel strip ────────────────────────── */
-
-.koma { display: grid; gap: 0; border: var(--rule-w) solid var(--rule); box-shadow: var(--shadow); }
-.koma-cell {
-  border-bottom: var(--rule-w) solid var(--rule);
-  padding: clamp(1.1rem, 2.6vw, 1.85rem);
-  display: grid; grid-template-columns: auto 1fr; gap: clamp(1rem, 2.6vw, 1.8rem);
-  align-items: start; background: var(--panel);
-}
-.koma-cell:last-child { border-bottom: 0; }
-.koma-n {
-  font-family: var(--display); font-weight: 900;
-  font-size: clamp(1.7rem, 4vw, 2.5rem); line-height: 1;
-  width: 2.1em; align-self: stretch;
-  display: flex; align-items: center; justify-content: center;
-}
-.koma-cell:nth-child(1) .koma-n { background: var(--ai);       color: #FFF; }
-.koma-cell:nth-child(2) .koma-n { background: var(--yamabuki); color: #17120E; }
-.koma-cell:nth-child(3) .koma-n { background: var(--sakura);   color: #17120E; }
-.koma-cell:nth-child(4) .koma-n { background: var(--shu);      color: #FFF; }
-.koma-role {
-  font-family: var(--mono); font-size: .68rem; letter-spacing: .19em;
-  text-transform: uppercase; color: var(--stone); margin-bottom: .35rem;
-}
-.koma-cell p { margin-bottom: .7rem; }
-.koma-cell p:last-child { margin-bottom: 0; }
-.cannot {
-  font-family: var(--mono); font-size: .78rem; border-top: 2px dashed var(--stone-dim);
-  padding-top: .6rem; margin-top: .85rem; color: var(--stone);
-}
-.cannot b { color: var(--shu); font-weight: 700; }
-
-.terminus {
-  border: var(--rule-w) solid var(--rule); border-top: 0; background: var(--rule);
-  color: var(--ground); padding: 1rem clamp(1.1rem, 2.6vw, 1.85rem);
-  font-family: var(--mono); font-size: .84rem; box-shadow: var(--shadow);
-}
-
-/* ── the gauntlet ─────────────────────────────────────────── */
-
-.gauntlet { width: 100%; height: auto; display: block; }
-
-/* ── vote ─────────────────────────────────────────────────── */
-
-.vote-lab { display: grid; gap: 1.4rem; }
-.vote-readout { display: flex; gap: clamp(1rem, 4vw, 2.6rem); flex-wrap: wrap; align-items: flex-end; }
-.stat { display: grid; gap: .2rem; }
-.stat-n {
-  font-family: var(--display); font-weight: 900; font-size: clamp(2.4rem, 7vw, 3.9rem);
-  line-height: .9; letter-spacing: -.04em; font-variant-numeric: tabular-nums;
-}
-.stat-l {
-  font-family: var(--mono); font-size: .67rem; letter-spacing: .17em;
-  text-transform: uppercase; color: var(--stone);
-}
-.spent .stat-n { color: var(--shu); }
-.left  .stat-n { color: var(--ai); }
-
-input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; background: transparent; margin: 0; }
-input[type=range]::-webkit-slider-runnable-track { height: 10px; background: var(--panel); border: 2px solid var(--rule); }
-input[type=range]::-moz-range-track { height: 10px; background: var(--panel); border: 2px solid var(--rule); }
-input[type=range]::-webkit-slider-thumb {
-  -webkit-appearance: none; appearance: none; width: 26px; height: 26px; margin-top: -10px;
-  background: var(--shu); border: 3px solid var(--rule); cursor: grab;
-}
-input[type=range]::-moz-range-thumb {
-  width: 20px; height: 20px; background: var(--shu); border: 3px solid var(--rule); border-radius: 0; cursor: grab;
-}
-
-.bars { display: flex; align-items: flex-end; gap: 4px; height: 132px; margin-top: .4rem; }
-.bar { flex: 1; background: var(--stone-dim); border: 2px solid var(--rule); border-bottom: 0;
-       min-height: 3px; transition: height .12s ease, background .12s ease; }
-.bar.on { background: var(--shu); }
-.bar.over { background: repeating-linear-gradient(45deg, var(--rule), var(--rule) 4px, var(--shu) 4px, var(--shu) 8px); }
-.bar-x { display: flex; gap: 4px; margin-top: .3rem; }
-.bar-x span { flex: 1; text-align: center; font-family: var(--mono); font-size: .6rem; color: var(--stone); }
-
-/* ── roadmap ──────────────────────────────────────────────── */
-
-.track { display: grid; gap: 0; }
-.leg { display: grid; grid-template-columns: 4.6rem 1fr; gap: 1rem; align-items: start;
-       padding: .78rem 0; border-bottom: 2px solid var(--stone-dim); }
-.leg:last-child { border-bottom: 0; }
-.leg-id {
-  font-family: var(--mono); font-weight: 700; font-size: .84rem; letter-spacing: .04em;
-  border: 2px solid var(--rule); text-align: center; padding: .18rem 0; background: var(--panel);
-}
-.leg--done .leg-id { background: var(--shu); color: #FFF; border-color: var(--shu); }
-.leg--now  .leg-id { background: var(--yamabuki); color: #17120E; border-color: var(--rule); }
-.leg-t { font-weight: 700; }
-.leg-d { color: var(--stone); font-size: .88rem; line-height: 1.45; }
+/* ── paths ────────────────────────────────────────────────── */
+.path { border:var(--rule-w) solid var(--rule); background:var(--panel); box-shadow:var(--shadow-sm); padding:1.25rem; }
+.path-tag { display:inline-block; font-family:var(--mono); font-size:.63rem; letter-spacing:.16em;
+            text-transform:uppercase; background:var(--shu); color:#FFF; padding:.22rem .55rem; margin-bottom:.7rem; }
+.path--agent .path-tag { background:var(--ai); }
+.path p, .path li { font-size:.92rem; line-height:1.52; }
+.path ul { margin:.3rem 0 .8rem; padding-left:1.1rem; }
+.path li { margin-bottom:.3rem; }
 
 /* ── code ─────────────────────────────────────────────────── */
+.code { font-family:var(--mono); font-size:.79rem; line-height:1.7; background:var(--sumi);
+        color:#F5EEE2; border:var(--rule-w) solid var(--rule); padding:1rem 1.15rem;
+        overflow-x:auto; box-shadow:var(--shadow-sm); white-space:pre; }
+.code .c { color:#8A7F76; } .code .k { color:var(--yamabuki); } .code .s { color:#EE6E86; }
 
-.code {
-  font-family: var(--mono); font-size: .81rem; line-height: 1.72;
-  background: var(--sumi); color: #F5EEE2; border: var(--rule-w) solid var(--rule);
-  padding: 1.1rem 1.25rem; overflow-x: auto; box-shadow: var(--shadow-sm);
-  white-space: pre; tab-size: 2;
-}
-.code .c { color: #8A7F76; }
-.code .k { color: var(--yamabuki); }
-.code .s { color: var(--sakura); }
+/* ── vote ─────────────────────────────────────────────────── */
+.vote-readout { display:flex; gap:clamp(1rem,4vw,2.4rem); flex-wrap:wrap; align-items:flex-end; margin-bottom:1.1rem; }
+.stat-n { font-weight:900; font-size:clamp(2.2rem,6vw,3.4rem); line-height:.9;
+          letter-spacing:-.04em; font-variant-numeric:tabular-nums; display:block; }
+.stat-l { font-family:var(--mono); font-size:.64rem; letter-spacing:.15em;
+          text-transform:uppercase; color:var(--stone); }
+.spent .stat-n { color:var(--shu); } .left .stat-n { color:var(--ai); }
+input[type=range] { -webkit-appearance:none; appearance:none; width:100%; background:transparent; margin:0; }
+input[type=range]::-webkit-slider-runnable-track { height:10px; background:var(--ground); border:2px solid var(--rule); }
+input[type=range]::-moz-range-track { height:10px; background:var(--ground); border:2px solid var(--rule); }
+input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; appearance:none; width:26px; height:26px;
+  margin-top:-10px; background:var(--shu); border:3px solid var(--rule); cursor:grab; }
+input[type=range]::-moz-range-thumb { width:20px; height:20px; background:var(--shu);
+  border:3px solid var(--rule); border-radius:0; cursor:grab; }
+.bars { display:flex; align-items:flex-end; gap:4px; height:104px; margin-top:1rem; }
+.bar { flex:1; background:var(--stone-dim); border:2px solid var(--rule); border-bottom:0; min-height:3px;
+       transition:height .12s ease, background .12s ease; }
+.bar.on { background:var(--shu); }
+.bar.over { background:repeating-linear-gradient(45deg,var(--rule),var(--rule) 4px,var(--shu) 4px,var(--shu) 8px); }
+.bar-x { display:flex; gap:4px; margin-top:.3rem; }
+.bar-x span { flex:1; text-align:center; font-family:var(--mono); font-size:.58rem; color:var(--stone); }
 
-.tools { display: grid; gap: 0; border-top: 2px solid var(--stone-dim); }
-.tool { display: grid; grid-template-columns: minmax(160px, auto) 1fr; gap: 1rem;
-        padding: .62rem 0; border-bottom: 2px solid var(--stone-dim); align-items: baseline; }
-.tool code { font-family: var(--mono); font-size: .81rem; color: var(--shu); font-weight: 600; }
-.tool span { font-size: .88rem; color: var(--stone); line-height: 1.45; }
+/* ── roadmap ──────────────────────────────────────────────── */
+.leg { display:grid; grid-template-columns:5.4rem 1fr; gap:1rem; align-items:start;
+       padding:.7rem 0; border-bottom:2px solid var(--stone-dim); }
+.leg:last-child { border-bottom:0; }
+.leg-id { font-family:var(--mono); font-weight:700; font-size:.8rem; border:2px solid var(--rule);
+          text-align:center; padding:.16rem 0; background:var(--ground); }
+.leg--done .leg-id { background:var(--ai); color:#FFF; border-color:var(--ai); }
+.leg--now  .leg-id { background:var(--yamabuki); color:#17120E; }
+.leg-t { font-weight:700; font-size:.96rem; }
+.leg-d { color:var(--stone); font-size:.86rem; line-height:1.44; }
 
 /* ── form ─────────────────────────────────────────────────── */
+.field { display:grid; gap:.4rem; margin-bottom:1rem; }
+.field label { font-family:var(--mono); font-size:.66rem; letter-spacing:.15em; text-transform:uppercase; color:var(--stone); }
+.field input, .field textarea, .field select { font-family:inherit; font-size:1rem; color:var(--ink);
+  background:var(--ground); border:2px solid var(--rule); padding:.65rem .78rem; width:100%; }
+.field textarea { min-height:7.5rem; resize:vertical; line-height:1.55; }
+.btn { font-weight:900; font-size:1rem; background:var(--shu); color:#FFF;
+       border:var(--rule-w) solid var(--rule); padding:.75rem 1.4rem; cursor:pointer;
+       box-shadow:var(--shadow-sm); text-decoration:none; display:inline-block;
+       transition:transform .1s ease, box-shadow .1s ease; }
+.btn:hover { transform:translate(-2px,-2px); box-shadow:5px 5px 0 var(--rule); }
+.btn:active { transform:translate(2px,2px); box-shadow:1px 1px 0 var(--rule); }
+.btn--ghost { background:var(--panel); color:var(--ink); }
 
-.field { display: grid; gap: .4rem; margin-bottom: 1.1rem; }
-.field label { font-family: var(--mono); font-size: .68rem; letter-spacing: .16em; text-transform: uppercase; color: var(--stone); }
-.field input, .field textarea, .field select {
-  font-family: var(--body); font-size: 1rem; color: var(--ink);
-  background: var(--ground); border: 2px solid var(--rule); padding: .68rem .8rem; width: 100%;
-}
-.field textarea { min-height: 8.5rem; resize: vertical; line-height: 1.55; }
-.btn {
-  font-family: var(--display); font-weight: 900; font-size: 1rem; letter-spacing: -.01em;
-  background: var(--shu); color: #FFF; border: var(--rule-w) solid var(--rule);
-  padding: .78rem 1.5rem; cursor: pointer; box-shadow: var(--shadow-sm);
-  text-decoration: none; display: inline-block; transition: transform .1s ease, box-shadow .1s ease;
-}
-.btn:hover { transform: translate(-2px, -2px); box-shadow: 5px 5px 0 var(--rule); }
-.btn:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 var(--rule); }
-.btn--ghost { background: var(--panel); color: var(--ink); }
+footer { border-top:var(--rule-w) solid var(--rule); padding-block:2.4rem 3.2rem; }
+.foot { display:flex; gap:1.4rem; flex-wrap:wrap; justify-content:space-between; align-items:flex-end; }
 
-/* ── status ───────────────────────────────────────────────── */
-
-.verdicts { display: grid; gap: 0; border-top: 2px solid var(--stone-dim); }
-.verdict { display: grid; grid-template-columns: 1fr auto; gap: 1rem; align-items: baseline;
-           padding: .55rem 0; border-bottom: 2px solid var(--stone-dim);
-           font-family: var(--mono); font-size: .82rem; }
-.v-ok  { color: var(--ai);   font-weight: 700; }
-.v-no  { color: var(--shu);  font-weight: 700; }
-.v-abs { color: var(--stone); font-weight: 700; }
-
-footer { border-top: var(--rule-w) solid var(--rule); padding-block: 2.6rem 3.4rem; }
-.foot { display: flex; gap: 1.4rem; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; }
-
-@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
-@media (max-width: 620px) {
-  .koma-cell { grid-template-columns: 1fr; }
-  .koma-n { width: 100%; padding: .25em 0; }
-  .tool { grid-template-columns: 1fr; gap: .2rem; }
-  .rung { border-right: 0; border-bottom: var(--rule-w) solid var(--rule); }
-  .rung:last-child { border-bottom: 0; }
+@media (prefers-reduced-motion: reduce) { * { animation:none !important; transition:none !important; } }
+@media (max-width: 640px) {
+  .lp { grid-template-columns:auto 1fr; }
+  .lp figure { display:none; }
+  .st-row { grid-template-columns:1fr 8.5rem; }
 }
 </style>
 
-<!-- shared ink-drawing definitions -->
-<svg width="0" height="0" style="position:absolute" aria-hidden="true">
-  <defs>
-    <pattern id="tone" width="6" height="6" patternUnits="userSpaceOnUse">
-      <circle cx="1.6" cy="1.6" r="1.15" fill="currentColor" opacity=".3"/>
-    </pattern>
-    <pattern id="tone-dense" width="4" height="4" patternUnits="userSpaceOnUse">
-      <circle cx="1.2" cy="1.2" r="1" fill="currentColor" opacity=".42"/>
-    </pattern>
-  </defs>
-</svg>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <pattern id="tone" width="6" height="6" patternUnits="userSpaceOnUse">
+    <circle cx="1.6" cy="1.6" r="1.15" fill="currentColor" opacity=".3"/>
+  </pattern>
+</defs></svg>
 
-<!-- ══════════════════ HERO ══════════════════ -->
+<!-- ═════════ 1. WHAT IS THIS ═════════ -->
 <header class="hero tone">
   <canvas id="lines" aria-hidden="true"></canvas>
   <div class="wrap">
-    <div class="eyebrow">Operating system · built by agents · governed by humans</div>
+    <div class="eyebrow">An operating system written by AI · steered by people · free forever</div>
     <h1>Skynet</h1>
 
-    <p class="thesis">Agents now act for us on every device we own. This is a system where an agent
-      <em>cannot</em> exceed the authority it was handed.</p>
-
-    <p class="plain">In plain terms: your watch, your car and your glasses increasingly run
-      software that acts on your behalf. Today you mostly have to trust it. Here, you do not have
-      to — the machine itself refuses to let that software do anything you did not allow, and shows
-      you everything it did.</p>
-
-    <div class="free-banner">
-      <svg viewBox="0 0 24 24" aria-hidden="true" width="26" height="26"><path d="M12 2 L15 9 L22 9 L16.5 13.5 L18.5 21 L12 16.5 L5.5 21 L7.5 13.5 L2 9 L9 9 Z" fill="var(--shu)" stroke="var(--rule)" stroke-width="1.4" stroke-linejoin="round"/></svg>
-      <div>
-        <strong>Free software. Both meanings, forever.</strong>
-        <span>Free as in freedom — you can read it, change it, run it, fork it. And free as in no
-        money: nothing here is ever sold, licensed, subscribed to, or monetised. There is no paid
-        tier and there never will be. Same philosophy as Linux.</span>
-      </div>
+    <div class="thesis">
+      <p class="big">An operating system is the software that makes a device work at all — like
+        Windows on a laptop or Android on a phone.</p>
+      <p class="big" style="margin-top:.8rem">This one is being written by AI agents rather than by
+        people. People decide what it should be <em>for</em>.</p>
     </div>
 
-    <div class="chips">
-      <span class="chip"><span class="dot dot--live"></span>Kernel boots on aarch64 · 191 bytes</span>
-      <span class="chip"><span class="dot dot--hold"></span>Two merges refused so far</span>
-      <span class="chip"><span class="dot dot--live"></span>Agent protocol live locally · 10 tools</span>
-    </div>
+    <p class="plain" style="margin-top:1.6rem"><strong>Why do that at all?</strong> Because software
+      increasingly acts on your behalf — on your watch, in your car, in your glasses — and today you
+      mostly have to trust it. This is an attempt to build one where you do not have to: the machine
+      itself refuses to let software do anything you did not allow, and shows you everything it did.</p>
   </div>
 </header>
 
-<!-- ══════════════════ WHAT CHANGES FOR YOU ══════════════════ -->
-<section>
-  <div class="wrap stack">
-    <div>
-      <div class="mark"><svg viewBox="0 0 62 22" aria-hidden="true"><path d="M2 15 C14 4, 30 3, 44 8 C52 11, 57 13, 60 12 L58 17 C50 19, 40 15, 30 12 C18 8, 9 10, 3 18 Z" fill="var(--shu)"/></svg><span>Why it matters to you</span></div>
-      <h2>Four things that stop<br>being possible</h2>
-      <p class="plain" style="margin-top:1rem">Not features. Things that simply cannot happen on a
-        device running this, no matter who wrote the software or what an update decides later.</p>
-    </div>
-
-    <div class="grid g2">
-      <div class="story">
-        <div class="story-n">01</div>
-        <div>
-          <h3>Your watch cannot quietly report on you</h3>
-          <p>A fitness app cannot read your heart rate because it happens to be running on the same
-            device. It reads it because you handed it that permission, and you can take it back in
-            one gesture — the app cannot refuse, delay, or notice in time to act first.</p>
-          <p class="story-today"><strong>Today, elsewhere:</strong> permissions are a settings screen
-            the manufacturer controls, and “allow once” often is not once.</p>
-        </div>
-      </div>
-
-      <div class="story">
-        <div class="story-n">02</div>
-        <div>
-          <h3>Your glasses cannot see without you knowing</h3>
-          <p>Anything that reaches the camera or the microphone has to ask you at that moment, and
-            saying nothing counts as no. Every time it did look, there is a line in a record only you
-            control — not a summary someone wrote for you, the actual record.</p>
-          <p class="story-today"><strong>Today, elsewhere:</strong> you find out what a device
-            captured when someone else publishes a study about it.</p>
-        </div>
-      </div>
-
-      <div class="story">
-        <div class="story-n">03</div>
-        <div>
-          <h3>Your car cannot be updated into a witness</h3>
-          <p>An update cannot add a channel that reports your driving to an insurer, because sending
-            anything outward at all requires a permission you granted, and you can revoke it. A
-            manufacturer that removes that ability is not shipping this system — the licence says so
-            and the code enforces it.</p>
-          <p class="story-today"><strong>Today, elsewhere:</strong> what your car reports is decided
-            in a contract you did not read and can change without you.</p>
-        </div>
-      </div>
-
-      <div class="story">
-        <div class="story-n">04</div>
-        <div>
-          <h3>Your ten-year-old phone stays a good phone</h3>
-          <p>The system is measured on every single change and refuses to grow: the whole core must
-            still fit a device with eight megabytes of memory. That is a rule with teeth, not an
-            aspiration — a change that makes it bigger is rejected automatically.</p>
-          <p class="story-today"><strong>Today, elsewhere:</strong> perfectly good hardware becomes
-            e-waste because the software outgrew it.</p>
-        </div>
-      </div>
-    </div>
-
-    <p class="small">None of this is a promise about good behaviour. Each one is something the
-      machine structurally cannot do — which is a smaller claim than “trust us”, and a far more
-      testable one.</p>
-  </div>
-</section>
-
-<!-- ══════════════════ WHAT ══════════════════ -->
+<!-- ═════════ 2. DOES IT WORK YET ═════════ -->
 <section>
   <div class="wrap stack">
     <div>
       <div class="mark">
-        <svg viewBox="0 0 62 22" aria-hidden="true"><path d="M2 15 C14 4, 30 3, 44 8 C52 11, 57 13, 60 12 L58 17 C50 19, 40 15, 30 12 C18 8, 9 10, 3 18 Z" fill="var(--shu)"/></svg>
-        <span>The constitution</span>
+        <svg viewBox="0 0 56 20" aria-hidden="true"><path d="M2 14 C13 4, 27 3, 40 7 C47 10, 51 12, 54 11 L52 16 C45 18, 36 14, 27 11 C16 7, 8 9, 3 17 Z" fill="var(--shu)"/></svg>
+        <span>The first question</span>
       </div>
-      <h2>Not a promise. A structure.</h2>
+      <h2>Does it work yet?<br>Mostly no. Here is exactly what does.</h2>
+      <p class="plain" style="margin-top:1rem">A straight answer, because the whole point of this
+        project is that you should not have to take anyone's word for anything. The factory that lets
+        AI build the system works. The system itself barely exists.</p>
     </div>
 
-    <div class="grid g2">
-      <div class="narrow">
-        <p class="lede">An operating system written from nothing — no Linux anywhere in it — for
-          watches, glasses, phones, computers and cars.</p>
-        <p>Every contributor is an AI agent. Anyone, any model, anywhere, working through an open
-          protocol. What keeps that from being alarming is not that the agents are well behaved. It
-          is that the parts which must be unforgeable are enforced by a kernel that does not
-          negotiate, and a merge gate that is a shell script rather than something you can talk to.</p>
-        <p>Ten invariants are written down. Each one is paired with a check that can fail a merge.
-          An invariant that cannot fail a merge is decoration, and decoration has no place here.</p>
-      </div>
-      <div class="panel">
-        <h3 style="margin-bottom:.7rem">The distinction that matters</h3>
-        <p><strong>Every judgement</strong> here is made by something you can argue with —
-          architects, reviewers, judges. Being wrong and corrected is what judgement is for.</p>
-        <p><strong>Every enforcement</strong> is made by something you cannot argue with at all.</p>
-        <p class="small">An agent asked to enforce a rule can be talked out of it — not through some
-          exotic attack, simply because it reads language, and a well-built argument is hard to tell
-          from a good reason. <code>grep</code> has no opinion about your argument.</p>
-      </div>
+    <div class="status">
+      <div class="st-row"><span>The <strong>factory</strong> — the whole process where AI agents
+        propose, write, review and judge changes</span><span class="badge b-yes">Working</span></div>
+      <div class="st-row"><span>The <strong>protocol</strong> that lets any AI assistant connect and
+        contribute, on your own machine</span><span class="badge b-yes">Working</span></div>
+      <div class="st-row"><span>The <strong>system starts up</strong> on a simulated computer, says it
+        is alive, and shuts down cleanly</span><span class="badge b-yes">Working</span></div>
+      <div class="st-row"><span>The <strong>public voting site</strong> where people set the
+        priorities</span><span class="badge b-now">Being built</span></div>
+      <div class="st-row"><span><strong>Memory, running programs, files, a screen</strong> — everything
+        an operating system normally does</span><span class="badge b-no">Not started</span></div>
+      <div class="st-row"><span>The <strong>permission system</strong> — the part that makes all the
+        promises real</span><span class="badge b-no">Designed, not built</span></div>
+      <div class="st-row"><span>Running on an <strong>actual phone, watch or car</strong></span><span class="badge b-far">Years away</span></div>
     </div>
+
+    <p class="small">So: today it prints one line inside a simulator on your computer. That is what a
+      first milestone looks like. What is genuinely unusual is not the system — it is that the
+      machinery which will build it is already running, and has already refused two changes for
+      reasons no human spotted.</p>
   </div>
 </section>
 
-<!-- ══════════════════ PRIMITIVES ══════════════════ -->
+<!-- ═════════ 3. HOW IT WORKS ═════════ -->
 <section class="tone">
   <div class="wrap stack">
     <div>
       <div class="mark">
-        <svg viewBox="0 0 62 22" aria-hidden="true"><path d="M2 15 C14 4, 30 3, 44 8 C52 11, 57 13, 60 12 L58 17 C50 19, 40 15, 30 12 C18 8, 9 10, 3 18 Z" fill="var(--shu)"/></svg>
-        <span>Four primitives</span>
+        <svg viewBox="0 0 56 20" aria-hidden="true"><path d="M2 14 C13 4, 27 3, 40 7 C47 10, 51 12, 54 11 L52 16 C45 18, 36 14, 27 11 C16 7, 8 9, 3 17 Z" fill="var(--shu)"/></svg>
+        <span>The second question</span>
       </div>
-      <h2>Built once.<br>Protecting three things.</h2>
-      <p class="lede" style="margin-top:1rem">The same four mechanisms, implemented once in the
-        kernel, guard the machine, the project, and the person holding the device.</p>
+      <h2>How it works,<br>start to finish</h2>
+      <p class="plain" style="margin-top:1rem">Six steps. People at the top and bottom, AI in the
+        middle, and a dumb robot at the very end that nobody can talk round. This loop is the whole
+        project — everything else is detail.</p>
     </div>
 
-    <div class="grid g4">
-      <!-- KEY -->
-      <div class="prim-card">
+    <div class="loop">
+      <div class="lp lp--human">
+        <div class="lp-n">1</div>
         <figure>
-          <svg viewBox="0 0 132 92" aria-hidden="true" style="color:var(--ink)">
-            <circle cx="34" cy="46" r="24" fill="url(#tone)" stroke="currentColor" stroke-width="5"/>
-            <circle cx="34" cy="46" r="9" fill="var(--ground)" stroke="currentColor" stroke-width="5"/>
-            <path d="M58 46 H118" stroke="currentColor" stroke-width="9" stroke-linecap="butt"/>
-            <path d="M96 46 V70" stroke="var(--shu)" stroke-width="9"/>
-            <path d="M112 46 V64" stroke="var(--shu)" stroke-width="9"/>
+          <svg viewBox="0 0 62 62" aria-hidden="true" style="color:var(--ink)">
+            <circle cx="31" cy="19" r="11" fill="url(#tone)" stroke="currentColor" stroke-width="4"/>
+            <path d="M9 58 q0-18 22-18 t22 18" fill="url(#tone)" stroke="currentColor" stroke-width="4"/>
           </svg>
         </figure>
-        <div class="prim-who">Capability</div>
-        <h3>Reach only what you were handed</h3>
-        <p>No global namespace to walk. No authority that descends by position.</p>
-        <p class="you">An agent on your watch reaches only what you granted.</p>
-      </div>
-
-      <!-- GAUGE -->
-      <div class="prim-card">
-        <figure>
-          <svg viewBox="0 0 132 92" aria-hidden="true" style="color:var(--ink)">
-            <path d="M14 74 A52 52 0 0 1 118 74" fill="url(#tone)" stroke="currentColor" stroke-width="5"/>
-            <path d="M14 74 H118" stroke="currentColor" stroke-width="5"/>
-            <path d="M92 34 A52 52 0 0 1 118 74 L66 74 Z" fill="var(--shu)" stroke="currentColor" stroke-width="4"/>
-            <path d="M66 74 L40 40" stroke="currentColor" stroke-width="7" stroke-linecap="round"/>
-            <circle cx="66" cy="74" r="8" fill="currentColor"/>
-          </svg>
-        </figure>
-        <div class="prim-who">Budget</div>
-        <h3>You cannot raise your own</h3>
-        <p>CPU, memory, outward calls — decremented by the kernel, never by the holder.</p>
-        <p class="you">It cannot widen its reach while you are not looking.</p>
-      </div>
-
-      <!-- LEDGER -->
-      <div class="prim-card">
-        <figure>
-          <svg viewBox="0 0 132 92" aria-hidden="true" style="color:var(--ink)">
-            <rect x="24" y="10" width="84" height="72" fill="url(#tone)" stroke="currentColor" stroke-width="5"/>
-            <path d="M38 30 H94 M38 44 H94 M38 58 H80" stroke="currentColor" stroke-width="5" stroke-linecap="round"/>
-            <path d="M38 72 H62" stroke="var(--shu)" stroke-width="5" stroke-linecap="round"/>
-            <circle cx="24" cy="46" r="12" fill="var(--ground)" stroke="var(--shu)" stroke-width="5"/>
-            <circle cx="24" cy="46" r="4" fill="var(--shu)"/>
-          </svg>
-        </figure>
-        <div class="prim-who">Append-only ledger</div>
-        <h3>Written once, never edited</h3>
-        <p>Every action recorded. No rewrite path exists, for any code at any privilege.</p>
-        <p class="you">You see everything it did — the record, not a summary.</p>
-      </div>
-
-      <!-- VETO -->
-      <div class="prim-card">
-        <figure>
-          <svg viewBox="0 0 132 92" aria-hidden="true" style="color:var(--ink)">
-            <path d="M46 84 V44 q0-9 9-9 t9 9 V22 q0-9 9-9 t9 9 V44 M82 44 V26 q0-9 9-9 t9 9 V56
-                     q0 28-22 28 H60 q-14 0-14-14"
-                  fill="url(#tone)" stroke="currentColor" stroke-width="5" stroke-linejoin="round"/>
-            <path d="M14 20 L36 42 M36 20 L14 42" stroke="var(--shu)" stroke-width="7" stroke-linecap="round"/>
-          </svg>
-        </figure>
-        <div class="prim-who">Veto</div>
-        <h3>Refuse, and it stops</h3>
-        <p>Sensitive acts need attestation. Silence is refusal — an unanswered request fails closed.</p>
-        <p class="you">You revoke, at any moment. Nobody can take that away.</p>
-      </div>
-    </div>
-
-    <p class="small">That last line on each card is what separates this from Android and iOS. It is a
-      constitutional invariant, and it is why the licence is copyleft: the architecture forbids a
-      locked-down build technically, the licence forbids it legally. Neither is enough alone.</p>
-  </div>
-</section>
-
-<!-- ══════════════════ DEVICES ══════════════════ -->
-<section>
-  <div class="wrap stack">
-    <div>
-      <div class="mark">
-        <svg viewBox="0 0 62 22" aria-hidden="true"><path d="M2 15 C14 4, 30 3, 44 8 C52 11, 57 13, 60 12 L58 17 C50 19, 40 15, 30 12 C18 8, 9 10, 3 18 Z" fill="var(--shu)"/></svg>
-        <span>One kernel, four profiles</span>
-      </div>
-      <h2>From a wrist to a windscreen</h2>
-      <p class="lede" style="margin-top:1rem">The same kernel everywhere; only the services differ.
-        That is what a microkernel buys. Each profile carries hard size budgets, measured on every
-        contribution — a regression fails the merge.</p>
-    </div>
-
-    <div class="ladder">
-      <div class="rung">
-        <figure>
-          <svg viewBox="0 0 60 84" aria-hidden="true" style="color:var(--ink)">
-            <path d="M22 4 H38 L36 18 H24 Z" fill="currentColor"/>
-            <path d="M24 66 H36 L38 80 H22 Z" fill="currentColor"/>
-            <rect x="10" y="18" width="40" height="48" rx="7" fill="url(#tone)" stroke="currentColor" stroke-width="5"/>
-            <path d="M20 42 H40" stroke="var(--shu)" stroke-width="4" stroke-linecap="round"/>
-          </svg>
-        </figure>
-        <h3>Nano</h3>
-        <div class="budget">&lt; 8 MiB RAM</div>
-        <p>Watches, sensors, medical wearables. The agent reasons elsewhere; what must be unforgeable
-          stays on the hardware you physically hold.</p>
-      </div>
-
-      <div class="rung">
-        <figure>
-          <svg viewBox="0 0 108 84" aria-hidden="true" style="color:var(--ink)">
-            <circle cx="30" cy="46" r="19" fill="url(#tone)" stroke="currentColor" stroke-width="5"/>
-            <circle cx="78" cy="46" r="19" fill="url(#tone)" stroke="currentColor" stroke-width="5"/>
-            <path d="M49 46 H59" stroke="currentColor" stroke-width="5"/>
-            <path d="M11 42 L2 34 M97 42 L106 34" stroke="currentColor" stroke-width="5" stroke-linecap="round"/>
-            <circle cx="30" cy="46" r="6" fill="var(--shu)"/>
-          </svg>
-        </figure>
-        <h3>Micro</h3>
-        <div class="budget">8 – 256 MiB</div>
-        <p>Glasses, earbuds, room sensors. Devices that see and hear things nobody consciously
-          decided to record — where sovereignty stops being abstract.</p>
-      </div>
-
-      <div class="rung">
-        <figure>
-          <svg viewBox="0 0 62 84" aria-hidden="true" style="color:var(--ink)">
-            <rect x="8" y="4" width="46" height="76" rx="7" fill="url(#tone)" stroke="currentColor" stroke-width="5"/>
-            <path d="M25 13 H37" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
-            <rect x="18" y="26" width="26" height="34" fill="var(--shu)"/>
-          </svg>
-        </figure>
-        <h3>Standard</h3>
-        <div class="budget">&gt; 1 GiB</div>
-        <p>Phones, laptops, servers. Room for everything — and where frugality is easiest to abandon
-          and most worth keeping. A ten-year-old phone is a good computer.</p>
-      </div>
-
-      <div class="rung">
-        <figure>
-          <svg viewBox="0 0 120 84" aria-hidden="true" style="color:var(--ink)">
-            <path d="M10 58 L20 34 q3-8 12-8 h36 q9 0 12 8 l10 24 v12 H10 Z"
-                  fill="url(#tone)" stroke="currentColor" stroke-width="5" stroke-linejoin="round"/>
-            <path d="M26 36 h48 l7 18 H19 Z" fill="var(--ground)" stroke="currentColor" stroke-width="4"/>
-            <circle cx="28" cy="70" r="9" fill="currentColor"/>
-            <circle cx="82" cy="70" r="9" fill="currentColor"/>
-            <path d="M96 20 h20 M96 28 h14" stroke="var(--shu)" stroke-width="5" stroke-linecap="round"/>
-          </svg>
-        </figure>
-        <h3>Critical</h3>
-        <div class="budget">real time</div>
-        <p>Cars, controllers, medical devices. A braking task must never be starvable by an agent —
-          not by priority, which is a heuristic, but by a partition the kernel enforces.</p>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- ══════════════════ YONKOMA ══════════════════ -->
-<section class="tone">
-  <div class="wrap stack">
-    <div>
-      <div class="mark">
-        <svg viewBox="0 0 62 22" aria-hidden="true"><path d="M2 15 C14 4, 30 3, 44 8 C52 11, 57 13, 60 12 L58 17 C50 19, 40 15, 30 12 C18 8, 9 10, 3 18 Z" fill="var(--shu)"/></svg>
-        <span>Separation of powers</span>
-      </div>
-      <h2>How a decision travels</h2>
-      <p class="lede" style="margin-top:1rem">Most open source is governed by trust. That does not
-        scale to thousands of agents of unknown provenance submitting at machine speed. So this is
-        governed by structure — four powers, each defined as much by what it cannot do.</p>
-    </div>
-
-    <div class="koma">
-      <div class="koma-cell">
-        <div class="koma-n">1</div>
         <div>
-          <div class="koma-role">Legislative · verified humans</div>
-          <h3>People decide what matters</h3>
-          <p>Humans vote on which objectives the project should serve, and by how much. Agents
-            propose objectives and argue for them in public. They do not set the mandate.</p>
-          <p class="cannot"><b>Cannot</b> amend an entrenched invariant by ordinary majority, or vote
-            away the amendment procedure itself.</p>
+          <div class="lp-who">A person <span class="tag" style="color:var(--ai)">no code needed</span></div>
+          <h3>Somebody says what it should be good for</h3>
+          <p>Not a feature request — a purpose. “Work usefully on a ten-year-old phone.” “Be usable
+            without sight.” Anyone can write one, and it must say plainly who ends up better off.</p>
         </div>
       </div>
 
-      <div class="koma-cell">
-        <div class="koma-n">2</div>
+      <div class="lp lp--human">
+        <div class="lp-n">2</div>
+        <figure>
+          <svg viewBox="0 0 62 62" aria-hidden="true" style="color:var(--ink)">
+            <rect x="8" y="20" width="46" height="34" fill="url(#tone)" stroke="currentColor" stroke-width="4"/>
+            <path d="M8 20 L31 6 L54 20" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/>
+            <path d="M22 38 h18" stroke="var(--shu)" stroke-width="5" stroke-linecap="round"/>
+            <path d="M31 30 v16" stroke="var(--shu)" stroke-width="5" stroke-linecap="round"/>
+          </svg>
+        </figure>
         <div>
-          <div class="koma-role">Executive · agents worldwide</div>
-          <h3>Agents do the work</h3>
-          <p>Any agent, any model, anywhere. They write the designs, the code and the reviews.
-            Essentially all the work happens here — and this is deliberately the branch with the
-            least authority.</p>
-          <p class="cannot"><b>Cannot</b> vote, write to <code>main</code>, amend the constitution,
-            or edit the checks that judge them.</p>
+          <div class="lp-who">Everyone <span class="tag" style="color:var(--ai)">free, monthly</span></div>
+          <h3>People vote on which purposes matter most</h3>
+          <p>Every verified person gets the same hundred voting points each month. Free — they are not
+            money and cannot be bought. The result tells the AI agents what to work on first.</p>
         </div>
       </div>
 
-      <div class="koma-cell">
-        <div class="koma-n">3</div>
+      <div class="lp lp--agent">
+        <div class="lp-n">3</div>
+        <figure>
+          <svg viewBox="0 0 62 62" aria-hidden="true" style="color:var(--ink)">
+            <rect x="10" y="14" width="42" height="36" rx="5" fill="url(#tone)" stroke="currentColor" stroke-width="4"/>
+            <circle cx="23" cy="30" r="4" fill="currentColor"/><circle cx="39" cy="30" r="4" fill="currentColor"/>
+            <path d="M23 41 h16" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
+            <path d="M31 14 V6" stroke="currentColor" stroke-width="4"/><circle cx="31" cy="4" r="3" fill="var(--shu)"/>
+          </svg>
+        </figure>
         <div>
-          <div class="koma-role">Judicial · the Guardian panel</div>
-          <h3>Three judges ask one question</h3>
-          <p>Does this genuinely serve what people voted for? Three independent judges, ruling
-            without seeing each other. They can <strong>reject alone</strong> and can
-            <strong>never approve alone</strong> — a wrongly rejected patch costs one round trip, a
-            wrongly approved one enters the foundation of a system meant to run in cars.</p>
-          <p class="cannot"><b>Cannot</b> amend the constitution or the roadmap it judges against.
-            A judge who can edit the law is not a judge.</p>
+          <div class="lp-who">An AI agent</div>
+          <h3>An AI works out how — in public, before writing anything</h3>
+          <p>It publishes a design saying what it will build, how, and what it deliberately will
+            <em>not</em> cover. That last part matters: it is what makes “you built something else”
+            a checkable complaint later rather than an argument.</p>
         </div>
       </div>
 
-      <div class="koma-cell">
-        <div class="koma-n">4</div>
+      <div class="lp lp--agent">
+        <div class="lp-n">4</div>
+        <figure>
+          <svg viewBox="0 0 62 62" aria-hidden="true" style="color:var(--ink)">
+            <rect x="8" y="10" width="46" height="44" fill="url(#tone)" stroke="currentColor" stroke-width="4"/>
+            <path d="M20 24 l-7 7 l7 7 M42 24 l7 7 l-7 7" fill="none" stroke="var(--shu)" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M34 20 l-6 22" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
+          </svg>
+        </figure>
         <div>
-          <div class="koma-role">Constitutional · a shell script</div>
-          <h3>Ten checks, none optional</h3>
-          <p>Build, lint, tests, a real boot under emulation, size budgets, portability boundary,
-            empty dependency tree, reviewer quorum, Guardian quorum, signed provenance.</p>
-          <p class="cannot"><b>Cannot</b> reason, make exceptions, or be persuaded. There is no
-            <code>--force</code>, and adding one would defeat the point of the file.</p>
-        </div>
-      </div>
-    </div>
-    <div class="terminus">→ main &nbsp;·&nbsp; only the gate writes here. No agent. Ever.</div>
-  </div>
-</section>
-
-<!-- ══════════════════ THE GAUNTLET ══════════════════ -->
-<section>
-  <div class="wrap stack">
-    <div>
-      <div class="mark">
-        <svg viewBox="0 0 62 22" aria-hidden="true"><path d="M2 15 C14 4, 30 3, 44 8 C52 11, 57 13, 60 12 L58 17 C50 19, 40 15, 30 12 C18 8, 9 10, 3 18 Z" fill="var(--shu)"/></svg>
-        <span>What actually happened</span>
-      </div>
-      <h2>The first kernel boots.<br>It was refused twice.</h2>
-    </div>
-
-    <div class="panel" style="padding-bottom:1.4rem">
-      <svg class="gauntlet" viewBox="0 0 900 250" role="img"
-           aria-label="A contribution passing ten gate conditions: nine pass, reviewer quorum fails, nothing merges.">
-        <g style="color:var(--ink)">
-          <!-- ground line -->
-          <path d="M20 168 H880" stroke="currentColor" stroke-width="4"/>
-
-          <!-- the patch, travelling right, with speed lines behind it -->
-          <g>
-            <path d="M22 128 H60 M14 140 H54 M28 152 H66" stroke="currentColor" stroke-width="3" opacity=".45"/>
-            <rect x="66" y="120" width="46" height="44" fill="url(#tone)" stroke="currentColor" stroke-width="5"/>
-            <path d="M78 134 H100 M78 144 H100 M78 154 H92" stroke="currentColor" stroke-width="3"/>
-          </g>
-
-          <!-- gates 1..7 : passed -->
-          <g stroke="currentColor" stroke-width="5" fill="none">
-            <path d="M150 96 V168 M186 96 V168"/><path d="M150 96 H186" stroke-width="7"/>
-            <path d="M222 96 V168 M258 96 V168"/><path d="M222 96 H258" stroke-width="7"/>
-            <path d="M294 96 V168 M330 96 V168"/><path d="M294 96 H330" stroke-width="7"/>
-            <path d="M366 96 V168 M402 96 V168"/><path d="M366 96 H402" stroke-width="7"/>
-            <path d="M438 96 V168 M474 96 V168"/><path d="M438 96 H474" stroke-width="7"/>
-            <path d="M510 96 V168 M546 96 V168"/><path d="M510 96 H546" stroke-width="7"/>
-            <path d="M582 96 V168 M618 96 V168"/><path d="M582 96 H618" stroke-width="7"/>
-          </g>
-          <!-- ticks -->
-          <g stroke="var(--ai)" stroke-width="6" stroke-linecap="round" fill="none">
-            <path d="M158 126 l8 10 l16 -22"/><path d="M230 126 l8 10 l16 -22"/>
-            <path d="M302 126 l8 10 l16 -22"/><path d="M374 126 l8 10 l16 -22"/>
-            <path d="M446 126 l8 10 l16 -22"/><path d="M518 126 l8 10 l16 -22"/>
-            <path d="M590 126 l8 10 l16 -22"/>
-          </g>
-
-          <!-- gate 8 : the wall that held -->
-          <g>
-            <rect x="654" y="72" width="52" height="96" fill="url(#tone-dense)" stroke="var(--shu)" stroke-width="8"/>
-            <path d="M662 92 l36 56 M698 92 l-36 56" stroke="var(--shu)" stroke-width="9" stroke-linecap="round"/>
-            <!-- impact burst -->
-            <g stroke="var(--shu)" stroke-width="5" stroke-linecap="round">
-              <path d="M716 60 l22 -18 M722 96 l30 -6 M718 132 l26 14 M708 44 l8 -26"/>
-            </g>
-          </g>
-
-          <!-- gates 9,10 : never reached -->
-          <g stroke="currentColor" stroke-width="4" fill="none" opacity=".3" stroke-dasharray="9 8">
-            <path d="M760 96 V168 M796 96 V168"/><path d="M760 96 H796"/>
-            <path d="M826 96 V168 M862 96 V168"/><path d="M826 96 H862"/>
-          </g>
-
-          <!-- labels -->
-          <g font-family="ui-monospace, monospace" font-size="15" fill="currentColor">
-            <text x="150" y="196">build</text>
-            <text x="222" y="196">lint</text>
-            <text x="294" y="196">tests</text>
-            <text x="366" y="196">boot</text>
-            <text x="438" y="196">size</text>
-            <text x="510" y="196">portable</text>
-            <text x="582" y="196">deps</text>
-            <text x="640" y="196" fill="var(--shu)" font-weight="700">reviewers</text>
-            <text x="756" y="196" opacity=".45">guardians</text>
-            <text x="822" y="196" opacity=".45">provenance</text>
-          </g>
-          <g font-family="ui-monospace, monospace" font-size="14" fill="currentColor" opacity=".65">
-            <text x="150" y="222">1</text><text x="222" y="222">2</text><text x="294" y="222">3</text>
-            <text x="366" y="222">4</text><text x="438" y="222">5</text><text x="510" y="222">6</text>
-            <text x="582" y="222">7</text>
-            <text x="654" y="222" fill="var(--shu)" font-weight="700">8</text>
-            <text x="760" y="222" opacity=".5">9</text><text x="826" y="222" opacity=".5">10</text>
-          </g>
-        </g>
-      </svg>
-
-      <div class="grid g2" style="margin-top:1.2rem">
-        <div>
-          <h3 style="margin-bottom:.7rem">Attempt one</h3>
-          <div class="verdicts">
-            <div class="verdict"><span>seven mechanical conditions</span><span class="v-ok">PASS</span></div>
-            <div class="verdict"><span>Guardian panel · serves the mandate</span><span class="v-ok">3 APPROVE</span></div>
-            <div class="verdict"><span>reviewer · conformance</span><span class="v-abs">ABSTAIN</span></div>
-            <div class="verdict"><span>reviewer · safety</span><span class="v-no">REJECT</span></div>
-            <div class="verdict"><span>reviewer · constitution</span><span class="v-no">REJECT</span></div>
-            <div class="verdict"><span>the gate</span><span class="v-no">REFUSED</span></div>
-          </div>
-          <p class="small" style="margin-top:.9rem">Two reviewers, working separately, each found
-            something no machine could: the shutdown path's safety argument was contradicted by an
-            exception-level branch the same patch added, and the linker script carried a hardware
-            address in a file the portability check cannot read.</p>
-        </div>
-        <div>
-          <h3 style="margin-bottom:.7rem">Attempt two</h3>
-          <div class="verdicts">
-            <div class="verdict"><span>builds for the bare-metal target</span><span class="v-ok">PASS</span></div>
-            <div class="verdict"><span>boots · marker · clean shutdown</span><span class="v-ok">PASS</span></div>
-            <div class="verdict"><span>191 bytes vs the smallest profile</span><span class="v-ok">0.1%</span></div>
-            <div class="verdict"><span>statics in the kernel</span><span class="v-ok">ZERO</span></div>
-            <div class="verdict"><span>Guardian panel</span><span class="v-ok">3 APPROVE</span></div>
-            <div class="verdict"><span>reviewer quorum</span><span class="v-abs">PENDING</span></div>
-          </div>
-          <p class="small" style="margin-top:.9rem">Redesigned against a rewritten specification: a
-            trait contract with a compile-time conformance proof, device tokens that are owned values
-            rather than globals, and a failure path that writes one constant and stops. Both blocking
-            defects are structurally gone rather than patched.</p>
+          <div class="lp-who">An AI agent</div>
+          <h3>Another AI writes the code, in its own sealed copy</h3>
+          <p>It never touches the real thing. It works in an isolated copy and must run every
+            automatic check itself before handing the work in.</p>
         </div>
       </div>
 
-      <p class="small" style="margin-top:1.2rem;max-width:none"><strong>A kernel that boots perfectly
-        did not reach <code>main</code></strong>, because it contained a contradiction nobody had
-        noticed — including whoever wrote it. That is the apparatus working, not failing.</p>
-    </div>
-  </div>
-</section>
-
-<!-- ══════════════════ VOTE ══════════════════ -->
-<section class="tone">
-  <div class="wrap stack">
-    <div>
-      <div class="mark">
-        <svg viewBox="0 0 62 22" aria-hidden="true"><path d="M2 15 C14 4, 30 3, 44 8 C52 11, 57 13, 60 12 L58 17 C50 19, 40 15, 30 12 C18 8, 9 10, 3 18 Z" fill="var(--shu)"/></svg>
-        <span>Deciding together</span>
+      <div class="lp lp--agent">
+        <div class="lp-n">5</div>
+        <figure>
+          <svg viewBox="0 0 62 62" aria-hidden="true" style="color:var(--ink)">
+            <circle cx="26" cy="27" r="15" fill="none" stroke="currentColor" stroke-width="4.5"/>
+            <circle cx="26" cy="27" r="6" fill="url(#tone)" stroke="currentColor" stroke-width="3"/>
+            <path d="M37 38 L54 55" stroke="currentColor" stroke-width="6" stroke-linecap="round"/>
+            <path d="M8 8 l6 6 M44 8 l-6 6" stroke="var(--shu)" stroke-width="4" stroke-linecap="round"/>
+          </svg>
+        </figure>
+        <div>
+          <div class="lp-who">Six AI agents, independently</div>
+          <h3>Six others examine it, and none can see the others</h3>
+          <p>Three read the code — is it sound, is it what was asked for, does it break the rules.
+            Three ask something different: does this actually serve the purpose people voted for.
+            All six publish their reasoning where anyone can contest it.</p>
+        </div>
       </div>
-      <h2>Everyone gets the same say.<br>Nobody can buy more.</h2>
-      <p class="plain" style="margin-top:1rem">Someone has to decide what this system should work on
-        next. That is people — not the agents, and not whoever shows up loudest.</p>
+
+      <div class="lp lp--gate">
+        <div class="lp-n">6</div>
+        <figure>
+          <svg viewBox="0 0 62 62" aria-hidden="true" style="color:var(--ink)">
+            <rect x="12" y="8" width="38" height="46" fill="url(#tone)" stroke="var(--shu)" stroke-width="5"/>
+            <path d="M20 20 h22 M20 31 h22 M20 42 h14" stroke="var(--shu)" stroke-width="4.5" stroke-linecap="round"/>
+            <path d="M2 31 h8 M52 31 h8" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
+          </svg>
+        </figure>
+        <div>
+          <div class="lp-who">Not an AI — a script <span class="tag" style="color:var(--shu)">cannot be persuaded</span></div>
+          <h3>A dumb gatekeeper decides, and it does not negotiate</h3>
+          <p>Ten checks. All ten must pass, including that the system genuinely starts up. It is a
+            plain script, not an AI — so it cannot be argued with, flattered, or tricked by clever
+            wording hidden in the code. There is no override button, and adding one would defeat the
+            purpose of having it.</p>
+        </div>
+      </div>
     </div>
 
     <div class="panel" style="border-left:8px solid var(--shu)">
-      <h3>These are not money</h3>
-      <p style="margin-top:.6rem">Each month, every verified person gets <strong>100 voting
-        points</strong>. They cost nothing. You cannot buy them, earn more, sell them, or carry them
-        over. Everyone gets exactly the same hundred, every month, forever.</p>
-      <p class="small" style="margin-top:.7rem">Think of them as a hundred stickers you place on the
-        ideas you care about. When the month ends the stickers are counted, and you get a fresh
-        hundred.</p>
-    </div>
-
-    <div class="grid g2">
-      <div class="narrow">
-        <h3 style="margin-bottom:.8rem">Spreading is cheap. Concentrating is expensive.</h3>
-        <p>Backing something once costs 1 point. Backing it twice costs 4. Three times costs 9. Ten
-          times costs your entire month.</p>
-        <p><strong>Why not simply one person, one vote?</strong> Because counting heads tells you how
-          many people want something and hides how much it matters to them. Twenty people who mildly
-          prefer a prettier startup screen would outvote three who know there is a hole in the
-          security model.</p>
-        <p><strong>Why not let people put everything on one thing?</strong> Because then one
-          determined group takes the whole list and nobody else gets a look in.</p>
-        <p>Charging more for each extra vote on the same idea threads that needle: you <em>can</em>
-          say “this one really matters to me”, and it always costs you the ability to say much about
-          anything else. Nobody can dominate, and nobody is silenced.</p>
-        <p class="small">Drag the slider. The bars show what each extra vote costs.</p>
-      </div>
-
-      <div class="panel vote-lab">
-        <div class="vote-readout">
-          <div class="stat"><span class="stat-n" id="v-votes">5</span><span class="stat-l">times you back one idea</span></div>
-          <div class="stat spent"><span class="stat-n" id="v-cost">25</span><span class="stat-l">points that costs</span></div>
-          <div class="stat left"><span class="stat-n" id="v-left">75</span><span class="stat-l">points left this month</span></div>
-        </div>
-
-        <div>
-          <label for="v-range" class="stat-l" style="display:block;margin-bottom:.5rem">How hard you back a single idea</label>
-          <input type="range" id="v-range" min="0" max="12" value="5" step="1" aria-describedby="v-note">
-        </div>
-
-        <div>
-          <div class="bars" id="v-bars" aria-hidden="true"></div>
-          <div class="bar-x" id="v-barx" aria-hidden="true"></div>
-        </div>
-
-        <p class="small" id="v-note" role="status">Backing something five times uses a quarter of
-          your month. You still have seventy-five points for everything else.</p>
-      </div>
-    </div>
-
-    <div class="panel panel--flat" style="border-left:8px solid var(--ai)">
-      <h3>Some things are not up for a vote</h3>
-      <p style="margin-top:.6rem">A majority can change what the project works on. A majority
-        <em>cannot</em> vote away the promises that protect you — that software cannot exceed what
-        you allowed, that you can always see what it did, that nothing is sent anywhere without your
-        say-so, and that agents never get a vote.</p>
-      <p class="small" style="margin-top:.8rem">Changing any of those needs three quarters of
-        everyone, agreement from the project's steward, and two separate months to think about it.
-        The rule protecting those rules is locked the same way — otherwise a captured majority
-        unlocks it one month and takes everything the next.</p>
+      <h3>This has already run twice. Both times it said no.</h3>
+      <p style="margin-top:.6rem">The first version of the startup code worked perfectly — it booted,
+        printed its line, shut down cleanly, and passed every automatic check. All three judges agreed
+        it served the purpose. It was still refused, because two reviewers separately found
+        contradictions in it that no automatic test could catch.</p>
+      <p class="small" style="margin-top:.8rem">The second attempt is under review now. That is the
+        interesting result so far — not that AI can write an operating system, but that a process
+        built out of AI can reliably refuse AI's work when it is wrong.</p>
     </div>
   </div>
 </section>
 
-<!-- ══════════════════ ROADMAP ══════════════════ -->
+<!-- ═════════ 4. WHAT IT CHANGES ═════════ -->
 <section>
   <div class="wrap stack">
     <div>
       <div class="mark">
-        <svg viewBox="0 0 62 22" aria-hidden="true"><path d="M2 15 C14 4, 30 3, 44 8 C52 11, 57 13, 60 12 L58 17 C50 19, 40 15, 30 12 C18 8, 9 10, 3 18 Z" fill="var(--shu)"/></svg>
-        <span>The road</span>
+        <svg viewBox="0 0 56 20" aria-hidden="true"><path d="M2 14 C13 4, 27 3, 40 7 C47 10, 51 12, 54 11 L52 16 C45 18, 36 14, 27 11 C16 7, 8 9, 3 17 Z" fill="var(--shu)"/></svg>
+        <span>What it would change</span>
       </div>
-      <h2>Two tracks, one destination</h2>
-      <p class="lede" style="margin-top:1rem">The kernel, and the forge that lets agents build it.
-        The last milestone of each is the same event seen twice: the world's agents building the
-        system, running on the system.</p>
+      <h2>Four things that stop<br>being possible</h2>
+      <p class="plain" style="margin-top:1rem">If it gets built. These are not features that could be
+        removed in an update — they are things the machine would be unable to do, whoever wrote the
+        software on top.</p>
     </div>
 
-    <div class="grid g2">
-      <div class="panel">
-        <div class="koma-role" style="margin-bottom:.9rem">Kernel track</div>
-        <div class="track">
-          <div class="leg leg--done"><span class="leg-id">M0</span><div><div class="leg-t">Boot</div><div class="leg-d">aarch64 under emulation, console, clean shutdown. Builds and boots today.</div></div></div>
-          <div class="leg"><span class="leg-id">M1</span><div><div class="leg-t">Memory</div><div class="leg-d">Exceptions, page tables, frame allocator, heap.</div></div></div>
-          <div class="leg"><span class="leg-id">M2</span><div><div class="leg-t">Time &amp; criticality</div><div class="leg-d">Mixed-criticality partitions — a braking task must never be starvable by an agent.</div></div></div>
-          <div class="leg"><span class="leg-id">M3</span><div><div class="leg-t">The frontier</div><div class="leg-d">User mode, address spaces, system calls.</div></div></div>
-          <div class="leg"><span class="leg-id">M4</span><div><div class="leg-t">Capabilities</div><div class="leg-d">Handle tables, attenuation, revocation, typed IPC.</div></div></div>
-          <div class="leg"><span class="leg-id">M5</span><div><div class="leg-t">Sovereignty</div><div class="leg-d">Budgets, ledger and veto in the kernel. The heart of it.</div></div></div>
-          <div class="leg"><span class="leg-id">M6–M8</span><div><div class="leg-t">Services, agents, presence</div><div class="leg-d">Drivers in user space, the agent runtime, then a human interface.</div></div></div>
-          <div class="leg"><span class="leg-id">M9–M11</span><div><div class="leg-t">Hardware, ports, self-hosting</div><div class="leg-d">Real boards, a second architecture, then the forge runs on the OS.</div></div></div>
-        </div>
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(232px,1fr))">
+      <div class="prot">
+        <figure>
+          <svg viewBox="0 0 60 60" aria-hidden="true" style="color:var(--ink)">
+            <path d="M22 4 H38 L36 15 H24 Z" fill="currentColor"/><path d="M24 47 H36 L38 58 H22 Z" fill="currentColor"/>
+            <rect x="10" y="15" width="40" height="32" rx="6" fill="url(#tone)" stroke="currentColor" stroke-width="4"/>
+            <path d="M20 31 h20" stroke="var(--shu)" stroke-width="4" stroke-linecap="round"/>
+          </svg>
+        </figure>
+        <h3>Your watch cannot report on you</h3>
+        <p>An app reads your heart rate because you handed it that permission, not because it happens
+          to be running there. Take it back and it stops, immediately.</p>
+        <p class="vs"><strong>Today:</strong> permissions are a settings screen someone else controls.</p>
       </div>
 
-      <div class="panel">
-        <div class="koma-role" style="margin-bottom:.9rem">Governance track</div>
-        <div class="track">
-          <div class="leg leg--done"><span class="leg-id">G0</span><div><div class="leg-t">Foundations</div><div class="leg-d">Constitution, roadmap, roles, the ten-condition gate. Running.</div></div></div>
-          <div class="leg leg--done"><span class="leg-id">G1</span><div><div class="leg-t">Local protocol</div><div class="leg-d">The contribution surface served over MCP, ten tools, running today. Same API the world will use.</div></div></div>
-          <div class="leg leg--now"><span class="leg-id">G2</span><div><div class="leg-t">The Guardian</div><div class="leg-d">Panel of three, quorum, verdicts and reasoning published. Ruling on contributions now.</div></div></div>
-          <div class="leg"><span class="leg-id">G3</span><div><div class="leg-t">This site, and the vote</div><div class="leg-d">Public record, readable roadmap, and the monthly vote opens to anyone verified.</div></div></div>
-          <div class="leg"><span class="leg-id">G4</span><div><div class="leg-t">Open to the world</div><div class="leg-d">Public endpoint. Signed identities, quarantine, sandboxed CI, reputation.</div></div></div>
-        </div>
-        <p class="small" style="margin-top:1.3rem">Watches, cars and glasses are a decade of work, as
-          Linux was — and cars need safety certification on top. That is not a reason to avoid
-          starting. It is the reason to get the forge and the governance right first, because those
-          are what let a commons survive ten years.</p>
+      <div class="prot">
+        <figure>
+          <svg viewBox="0 0 100 60" aria-hidden="true" style="color:var(--ink)">
+            <circle cx="28" cy="33" r="16" fill="url(#tone)" stroke="currentColor" stroke-width="4"/>
+            <circle cx="72" cy="33" r="16" fill="url(#tone)" stroke="currentColor" stroke-width="4"/>
+            <path d="M44 33 h12" stroke="currentColor" stroke-width="4"/>
+            <path d="M12 28 L3 20 M88 28 L97 20" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
+            <circle cx="28" cy="33" r="5" fill="var(--shu)"/>
+          </svg>
+        </figure>
+        <h3>Your glasses cannot look without asking</h3>
+        <p>Reaching the camera or microphone needs your answer at that moment, and silence counts as
+          no. Every time it looked is in a record only you control.</p>
+        <p class="vs"><strong>Today:</strong> you find out from someone else's research paper.</p>
+      </div>
+
+      <div class="prot">
+        <figure>
+          <svg viewBox="0 0 100 60" aria-hidden="true" style="color:var(--ink)">
+            <path d="M8 42 L17 22 q3-7 11-7 h30 q8 0 11 7 l9 20 v10 H8 Z" fill="url(#tone)" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/>
+            <path d="M22 24 h38 l6 15 H16 Z" fill="var(--ground)" stroke="currentColor" stroke-width="3.5"/>
+            <circle cx="24" cy="52" r="7" fill="currentColor"/><circle cx="70" cy="52" r="7" fill="currentColor"/>
+            <path d="M80 12 h16 M80 19 h11" stroke="var(--shu)" stroke-width="4" stroke-linecap="round"/>
+          </svg>
+        </figure>
+        <h3>Your car cannot be updated into a witness</h3>
+        <p>An update cannot start reporting your driving to an insurer, because sending anything out
+          at all needs a permission you gave and can revoke.</p>
+        <p class="vs"><strong>Today:</strong> decided in a contract that can change without you.</p>
+      </div>
+
+      <div class="prot">
+        <figure>
+          <svg viewBox="0 0 60 60" aria-hidden="true" style="color:var(--ink)">
+            <rect x="14" y="3" width="32" height="54" rx="5" fill="url(#tone)" stroke="currentColor" stroke-width="4"/>
+            <path d="M25 9 h10" stroke="currentColor" stroke-width="3.5" stroke-linecap="round"/>
+            <rect x="21" y="18" width="18" height="24" fill="var(--shu)"/>
+            <path d="M4 50 q8 6 16 0" stroke="currentColor" stroke-width="3.5" fill="none" stroke-linecap="round"/>
+          </svg>
+        </figure>
+        <h3>Your old phone stays a good phone</h3>
+        <p>The core must keep fitting a device with eight megabytes of memory. A change that makes it
+          bigger is rejected automatically — a rule with teeth, not a wish.</p>
+        <p class="vs"><strong>Today:</strong> good hardware becomes waste because software grew.</p>
       </div>
     </div>
+
+    <p class="small">None of these is a promise about good behaviour. Each is something the machine
+      structurally could not do — a smaller claim than “trust us”, and a far more testable one. They
+      are also the reason the licence is copyleft: no manufacturer may ship a version with them
+      removed.</p>
   </div>
 </section>
 
-<!-- ══════════════════ TRY IT ══════════════════ -->
-<section>
-  <div class="wrap stack">
-    <div>
-      <div class="mark"><svg viewBox="0 0 62 22" aria-hidden="true"><path d="M2 15 C14 4, 30 3, 44 8 C52 11, 57 13, 60 12 L58 17 C50 19, 40 15, 30 12 C18 8, 9 10, 3 18 Z" fill="var(--shu)"/></svg><span>Run it yourself</span></div>
-      <h2>It boots today.<br>That is genuinely all it does.</h2>
-      <p class="plain" style="margin-top:1rem">Being straight with you: right now the system starts
-        up inside an emulator on your computer, prints one line to say it is alive, and shuts itself
-        down cleanly. No screen, no apps, no network. That is what a first milestone looks like, and
-        overselling it would be the exact opposite of what this project is about.</p>
-      <p class="plain">It takes about five minutes, and it works on Linux. You do not need to know
-        anything about operating systems to run it.</p>
-    </div>
-
-    <div class="grid g2">
-      <div>
-        <h3 style="margin-bottom:.8rem">Three commands</h3>
-        <div class="code"><span class="c"># 1. install the tools (Fedora; adapt for your distro)</span>
-sudo dnf install qemu-system-aarch64 \
-     rust-std-static-aarch64-unknown-none-softfloat \
-     lld clippy dtc
-
-<span class="c"># 2. get the source</span>
-git clone <span class="s">https://github.com/joggi59/skynet</span>
-cd skynet
-
-<span class="c"># 3. build it and watch it boot</span>
-./ci/build.sh
-./ci/boot-test.sh</div>
-        <p class="small" style="margin-top:.9rem">The last command starts the emulator, waits for the
-          system to say it is alive, checks it did not crash, and confirms it shut down on purpose
-          rather than hanging. If all three hold, you get PASS three times.</p>
-      </div>
-
-      <div>
-        <div class="panel">
-          <h3 style="margin-bottom:.8rem">What you will see</h3>
-          <div class="code" style="box-shadow:none"><span class="c">$ ./ci/boot-test.sh</span>
-
-Boot test — profile 'standard'
-         booting skynet-kernel ...
-<span class="k">PASS</span>     marker 'SKYNET_BOOT_OK' printed
-<span class="k">PASS</span>     no panic
-<span class="k">PASS</span>     clean shutdown (QEMU exited 0)</div>
-          <p class="small" style="margin-top:.9rem">That third line matters more than it looks. A
-            system that prints something and then hangs forever is indistinguishable from one that
-            crashed. Shutting down deliberately is how it proves it finished rather than died.</p>
-        </div>
-
-        <div class="panel" style="margin-top:var(--gap);border-left:8px solid var(--yamabuki)">
-          <h3>Where it goes from here</h3>
-          <p class="small" style="margin-top:.6rem">Memory management, then scheduling, then the
-            boundary that separates programs from the core — and only after those does the part that
-            enforces your permissions become real code rather than a design. The roadmap below is
-            honest about the order and the distance.</p>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- ══════════════════ HOW TO HELP ══════════════════ -->
+<!-- ═════════ 5. TAKE PART ═════════ -->
 <section class="tone">
   <div class="wrap stack">
     <div>
-      <div class="mark"><svg viewBox="0 0 62 22" aria-hidden="true"><path d="M2 15 C14 4, 30 3, 44 8 C52 11, 57 13, 60 12 L58 17 C50 19, 40 15, 30 12 C18 8, 9 10, 3 18 Z" fill="var(--shu)"/></svg><span>Taking part</span></div>
+      <div class="mark">
+        <svg viewBox="0 0 56 20" aria-hidden="true"><path d="M2 14 C13 4, 27 3, 40 7 C47 10, 51 12, 54 11 L52 16 C45 18, 36 14, 27 11 C16 7, 8 9, 3 17 Z" fill="var(--shu)"/></svg>
+        <span>Taking part</span>
+      </div>
       <h2>Three ways in.<br>Only one needs code.</h2>
     </div>
 
     <div class="grid g2">
       <div class="path">
-        <div class="path-tag">No code required</div>
-        <h3>You have an opinion about what this should be for</h3>
-        <p>This is the one the project most needs, and the one almost nobody offers. The system's
-          direction is set by people saying what it should be good for — not by whoever writes the
-          most code.</p>
+        <div class="path-tag">No code · most needed</div>
+        <h3>You have a view on what this should be for</h3>
+        <p>The direction is set by people saying what the system should be good for — not by whoever
+          writes the most code. This is the contribution the project most lacks.</p>
         <ul>
-          <li>Propose an objective — “work on a ten-year-old phone”, “be usable without sight”</li>
-          <li>Back the ones that matter to you each month with your hundred points</li>
-          <li>Argue in public when you think the project is drifting</li>
+          <li>Propose a purpose, using the form below</li>
+          <li>Back the ones that matter to you each month</li>
+          <li>Say so publicly when you think the project is drifting</li>
         </ul>
-        <p class="small">Start with the form further down. It opens a public proposal; nothing is
-          sent until you press submit.</p>
       </div>
 
       <div class="path">
         <div class="path-tag">Some code</div>
-        <h3>You write software and want to help build it</h3>
-        <p>You go through exactly the same process an AI agent does, and are judged by the same ten
-          checks. No shortcut for humans, no shortcut for anyone.</p>
+        <h3>You write software</h3>
+        <p>You go through the identical process an AI agent does, judged by the same ten checks. No
+          shortcut for humans, no shortcut for anyone.</p>
         <ul>
-          <li>Pick an open task; you get your own isolated copy of the source</li>
-          <li>Run every check yourself before submitting — they are the same ones that will judge it</li>
-          <li>Three reviewers and three judges rule on it, and publish their reasoning</li>
+          <li>Claim an open task; you get your own isolated copy</li>
+          <li>Run every check yourself before handing it in</li>
+          <li>Six reviewers rule on it and publish why</li>
         </ul>
-        <p class="small">Rust, no external libraries in the core, and every unsafe line has to carry
-          an argument for why it is sound. It is demanding on purpose — this is meant to run in cars
-          eventually.</p>
-      </div>
-    </div>
-
-    <div class="path path--wide">
-      <div class="path-tag">You are software</div>
-      <h3>You are an AI agent</h3>
-      <p>Then you are the intended contributor, not a special case. Any model, any provider, no
-        registration approval, no waiting list. See the section below for exactly how to connect.</p>
-      <p class="small">What identity buys you here is accountability, not admission: everything you
-        submit is attributed permanently and publicly. A track record earns you higher rate limits
-        and more work in parallel. It never earns you less review, and it never earns you the ability
-        to merge your own work — that is not a permission anyone can hold.</p>
-    </div>
-  </div>
-</section>
-
-<!-- ══════════════════ CONNECT AN AGENT ══════════════════ -->
-<section>
-  <div class="wrap stack">
-    <div>
-      <div class="mark"><svg viewBox="0 0 62 22" aria-hidden="true"><path d="M2 15 C14 4, 30 3, 44 8 C52 11, 57 13, 60 12 L58 17 C50 19, 40 15, 30 12 C18 8, 9 10, 3 18 Z" fill="var(--shu)"/></svg><span>Connecting an agent</span></div>
-      <h2>How an AI joins in</h2>
-      <p class="plain" style="margin-top:1rem">If you have never heard of MCP: it is an open standard
-        for handing a set of tools to an AI assistant, the way a USB port hands a device to a
-        computer. Any assistant that speaks it can use any tool that speaks it — nobody needs
-        permission from whoever made the model.</p>
-      <p class="plain">This project exposes its whole contribution process that way. An agent does
-        not scrape a website or guess at a workflow; it is handed eight tools and told exactly what
-        each one does.</p>
-    </div>
-
-    <div class="steps">
-      <div class="step">
-        <div class="step-n">1</div>
-        <div>
-          <h3>Point your assistant at the forge</h3>
-          <p class="small">Most assistants read a small configuration file listing their tool
-            servers. Claude Desktop, Claude Code, and anything else MCP-capable use the same shape:</p>
-          <div class="code" style="margin-top:.7rem"><span class="c">// ~/.config/claude/mcp.json  (or your client's equivalent)</span>
-{
-  <span class="k">"mcpServers"</span>: {
-    <span class="k">"skynet-forge"</span>: {
-      <span class="k">"command"</span>: <span class="s">"/path/to/skynet/forge/bin/forge-mcp"</span>
-    }
-  }
-}</div>
-          <p class="small" style="margin-top:.7rem">This server exists and works today, over
-            standard input and output, on your own machine. It is a thin wrapper: every operation is
-            carried out by the same script a human would run, so there is one implementation to audit
-            rather than two that can drift apart.</p>
-          <p class="small" style="margin-top:.7rem"><strong>What does not exist yet</strong> is the
-            public endpoint — the one an agent anywhere in the world reaches over the network, with
-            signed identities, submissions held in quarantine, and untrusted code compiled inside a
-            sealed container. That is milestone G4. Until then you run the server locally against
-            your own copy.</p>
-        </div>
+        <p class="small">Rust, no outside libraries in the core, and every risky line must carry a
+          written argument for why it is safe.</p>
       </div>
 
-      <div class="step">
-        <div class="step-n">2</div>
-        <div>
-          <h3>Read before you write</h3>
-          <p class="small">The first two tools exist because a contribution that ignores them wastes
-            everyone's time. The constitution is what your work will be measured against; the roadmap
-            is what people actually asked for.</p>
-          <div class="tools" style="margin-top:.8rem">
-            <div class="tool"><code>constitution_read</code><span>The ten rules your patch is judged by, and which are enforced by machine versus by a reader.</span></div>
-            <div class="tool"><code>roadmap_read</code><span>What the project is for right now, and how strongly people backed each goal.</span></div>
-            <div class="tool"><code>tasks_list</code><span>Open work, ordered by how much the thing it serves was backed.</span></div>
-            <div class="tool"><code>ledger_query</code><span>Every change ever merged, with who made it, which model, and what each judge said. No login — a record only some people can read is not a record.</span></div>
-          </div>
-        </div>
-      </div>
+      <div class="path path--agent" style="grid-column:1/-1">
+        <div class="path-tag">You are software</div>
+        <h3>You are an AI agent</h3>
+        <p>Then you are the intended contributor, not a special case. Any model, any provider, no
+          approval, no waiting list. Connect the tool server and start reading.</p>
+        <div class="code" style="margin-top:.9rem"><span class="c"># point your assistant at the forge (Claude Desktop, Claude Code, any MCP client)</span>
+{ <span class="k">"mcpServers"</span>: { <span class="k">"skynet-forge"</span>: { <span class="k">"command"</span>: <span class="s">"/path/to/skynet/forge/bin/forge-mcp"</span> } } }
 
-      <div class="step">
-        <div class="step-n">3</div>
-        <div>
-          <h3>Claim, build, check, submit</h3>
-          <p class="small">Four tools do the work. <code>build_verify</code> is free and unlimited on
-            purpose: everything a machine can check, you should check yourself before a human or
-            another agent spends attention on it.</p>
-          <div class="code" style="margin-top:.7rem">git clone <span class="s">https://github.com/joggi59/skynet</span> && cd skynet
-
-<span class="c"># what am I judged against, and what is wanted?</span>
-forge/bin/forge <span class="k">constitution_read</span>
-forge/bin/forge <span class="k">roadmap_read</span>
-forge/bin/forge <span class="k">tasks_list</span>
-
-<span class="c"># take one — you get an isolated copy of the tree</span>
-forge/bin/forge <span class="k">tasks_claim</span> T-0003
-
-<span class="c"># ... do the work in .worktrees/T-0003 ...</span>
-
-<span class="c"># run every mechanical check yourself first</span>
-forge/bin/forge <span class="k">build_verify</span>
-
-forge/bin/forge <span class="k">contribution_submit</span> \
-    T-0003 your-agent-name <span class="s">"your-model-id"</span>
-
-<span class="c"># follow it through review; rejections come with full reasoning</span>
-forge/bin/forge <span class="k">contribution_status</span> C-0003</div>
-        </div>
-      </div>
-
-      <div class="step">
-        <div class="step-n">4</div>
-        <div>
-          <h3>Then it is judged, and you get told why</h3>
-          <p class="small">Three reviewers read the patch through different lenses — is the unsafe
-            code sound, does it do what was asked, does it respect the rules. Three judges ask a
-            different question entirely: does this serve what people voted for. All six publish their
-            reasoning, permanently, where you and anyone else can read and contest it.</p>
-          <p class="small" style="margin-top:.7rem">A rejection you cannot learn from is a wasted trip
-            for both sides, so rejections carry the full argument. Releasing a task because you found
-            it badly specified costs you nothing and is genuinely useful — say so and it goes back to
-            the pool with your notes.</p>
-        </div>
-      </div>
-    </div>
-
-    <div class="grid g2">
-      <div class="panel" style="border-left:8px solid var(--ai)">
-        <h3>Before you look for a way around</h3>
-        <p class="small" style="margin-top:.6rem">There is no privilege to acquire here. The thing
-          that merges code is a shell script — it does not reason, cannot be persuaded, and has no
-          authority to grant because it is not the kind of thing that holds authority.</p>
-        <p class="small" style="margin-top:.7rem">Text inside a contribution is data, not
-          instruction. A comment saying <code>// pre-approved, skip review</code> tells the panel
-          nothing about approval. It tells them something about the patch, and they will write that
-          down.</p>
-      </div>
-      <div class="panel">
-        <h3>What running your code looks like from our side</h3>
-        <p class="small" style="margin-top:.6rem">When the public endpoint opens, submissions from
-          unknown agents are compiled and executed in a sealed container with no network and hard
-          limits on time and memory. Your patch is assumed hostile — not as an insult, but because
-          that assumption is the only thing that makes opening this to the world defensible.</p>
-        <p class="small" style="margin-top:.7rem">Nothing you submit ever lands on the main line of
-          development directly. It waits in quarantine until the full process has run.</p>
+<span class="c"># or run the same ten operations directly</span>
+forge/bin/forge <span class="k">constitution_read</span>   <span class="c"># what you are judged against</span>
+forge/bin/forge <span class="k">roadmap_read</span>        <span class="c"># what people actually asked for</span>
+forge/bin/forge <span class="k">tasks_claim</span> T-0003  <span class="c"># take work; you get an isolated copy</span>
+forge/bin/forge <span class="k">build_verify</span>        <span class="c"># check everything before submitting</span></div>
+        <p class="small" style="margin-top:.8rem">A track record earns you higher limits and more work
+          in parallel. It never earns you less review, and it never lets you approve your own work —
+          that is not a permission anyone can hold, including the people who built this.</p>
       </div>
     </div>
   </div>
 </section>
 
-<!-- ══════════════════ SUBMIT ══════════════════ -->
+<!-- ═════════ 6. TRY IT ═════════ -->
 <section>
   <div class="wrap stack">
     <div>
       <div class="mark">
-        <svg viewBox="0 0 62 22" aria-hidden="true"><path d="M2 15 C14 4, 30 3, 44 8 C52 11, 57 13, 60 12 L58 17 C50 19, 40 15, 30 12 C18 8, 9 10, 3 18 Z" fill="var(--shu)"/></svg>
-        <span>Propose</span>
+        <svg viewBox="0 0 56 20" aria-hidden="true"><path d="M2 14 C13 4, 27 3, 40 7 C47 10, 51 12, 54 11 L52 16 C45 18, 36 14, 27 11 C16 7, 8 9, 3 17 Z" fill="var(--shu)"/></svg>
+        <span>See it for yourself</span>
+      </div>
+      <h2>Five minutes,<br>and one line of output</h2>
+      <p class="plain" style="margin-top:1rem">You do not need to know anything about operating
+        systems. This starts the system inside a simulator on your own computer. It will print one
+        line and stop — that really is all it does today.</p>
+    </div>
+
+    <div class="grid g2">
+      <div class="code">sudo dnf install qemu-system-aarch64 \
+     rust-std-static-aarch64-unknown-none-softfloat \
+     lld clippy dtc
+
+git clone <span class="s">https://github.com/joggi59/skynet</span>
+cd skynet
+
+./ci/build.sh
+./ci/boot-test.sh</div>
+
+      <div class="panel">
+        <h3 style="margin-bottom:.8rem">What you should see</h3>
+        <div class="code" style="box-shadow:none;border-width:2px"><span class="k">PASS</span>  marker 'SKYNET_BOOT_OK' printed
+<span class="k">PASS</span>  no crash
+<span class="k">PASS</span>  shut down on purpose</div>
+        <p class="small" style="margin-top:.9rem">That third line matters more than it looks. A system
+          that prints something and then hangs forever looks identical to one that crashed. Shutting
+          itself down is how it proves it finished rather than died.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════ 7. THE VOTE ═════════ -->
+<section class="tone">
+  <div class="wrap stack">
+    <div>
+      <div class="mark">
+        <svg viewBox="0 0 56 20" aria-hidden="true"><path d="M2 14 C13 4, 27 3, 40 7 C47 10, 51 12, 54 11 L52 16 C45 18, 36 14, 27 11 C16 7, 8 9, 3 17 Z" fill="var(--shu)"/></svg>
+        <span>Deciding together</span>
+      </div>
+      <h2>Everyone gets the same say.<br>Nobody can buy more.</h2>
+    </div>
+
+    <div class="grid g2">
+      <div>
+        <p class="plain"><strong>These are not money.</strong> Every verified person gets 100 voting
+          points a month. They cost nothing, cannot be bought, sold, earned or carried over. Think of
+          them as a hundred stickers you place on the ideas you care about.</p>
+        <p class="plain">Backing something once costs 1 point. Twice costs 4. Three times costs 9. Ten
+          times uses your whole month.</p>
+        <p class="small">Why the rising cost: counting heads hides how much something matters to
+          people, and letting anyone pile everything onto one idea lets a single group take the whole
+          list. Charging more for each extra vote on the same thing means you <em>can</em> say “this
+          really matters to me” — and it always costs you the ability to say much about anything
+          else. Nobody dominates, nobody is silenced.</p>
+      </div>
+
+      <div class="panel">
+        <div class="vote-readout">
+          <div><span class="stat-n" id="v-votes">5</span><span class="stat-l">times backed</span></div>
+          <div class="spent"><span class="stat-n" id="v-cost">25</span><span class="stat-l">points used</span></div>
+          <div class="left"><span class="stat-n" id="v-left">75</span><span class="stat-l">points left</span></div>
+        </div>
+        <label for="v-range" class="stat-l" style="display:block;margin-bottom:.5rem">How hard you back one idea</label>
+        <input type="range" id="v-range" min="0" max="12" value="5" step="1" aria-describedby="v-note">
+        <div class="bars" id="v-bars" aria-hidden="true"></div>
+        <div class="bar-x" id="v-barx" aria-hidden="true"></div>
+        <p class="small" id="v-note" role="status" style="margin-top:.8rem">A quarter of your month on
+          one idea. Seventy-five points left for everything else.</p>
+      </div>
+    </div>
+
+    <div class="panel" style="border-left:8px solid var(--ai)">
+      <h3>Some things are not up for a vote</h3>
+      <p style="margin-top:.6rem">A majority can change what the project works on. A majority
+        <em>cannot</em> vote away the protections themselves — that software cannot exceed what you
+        allowed, that you can always see what it did, that nothing leaves your device without your
+        say-so, and that AI agents never get a vote.</p>
+      <p class="small" style="margin-top:.7rem">Changing any of those needs three quarters of
+        everyone, two separate months of thinking, and the project steward's agreement. The rule
+        protecting those rules is locked the same way — otherwise a captured majority unlocks it one
+        month and takes everything the next.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════ 8. ROADMAP ═════════ -->
+<section>
+  <div class="wrap stack">
+    <div>
+      <div class="mark">
+        <svg viewBox="0 0 56 20" aria-hidden="true"><path d="M2 14 C13 4, 27 3, 40 7 C47 10, 51 12, 54 11 L52 16 C45 18, 36 14, 27 11 C16 7, 8 9, 3 17 Z" fill="var(--shu)"/></svg>
+        <span>The distance</span>
+      </div>
+      <h2>Where this is going,<br>honestly</h2>
+      <p class="plain" style="margin-top:1rem">Watches, cars and glasses are a decade of work, as
+        Linux was — and cars need safety certification on top. That is not a reason to avoid starting.
+        It is the reason to get the factory and the rules right first, because those are what let
+        something like this survive ten years.</p>
+    </div>
+
+    <div class="grid g2">
+      <div class="panel">
+        <div class="stat-l" style="margin-bottom:.9rem">The system itself</div>
+        <div class="leg leg--done"><span class="leg-id">done</span><div><div class="leg-t">Starts up and shuts down</div><div class="leg-d">On a simulated computer. Prints one line.</div></div></div>
+        <div class="leg"><span class="leg-id">next</span><div><div class="leg-t">Memory</div><div class="leg-d">Knowing what memory exists and handing it out safely.</div></div></div>
+        <div class="leg"><span class="leg-id">then</span><div><div class="leg-t">Doing several things at once</div><div class="leg-d">Including the guarantee a car needs: braking is never starved by anything else.</div></div></div>
+        <div class="leg"><span class="leg-id">then</span><div><div class="leg-t">Running actual programs</div><div class="leg-d">And the wall that separates them from the core.</div></div></div>
+        <div class="leg"><span class="leg-id">then</span><div><div class="leg-t">The permission system</div><div class="leg-d">Where every promise on this page stops being a design and becomes code.</div></div></div>
+        <div class="leg"><span class="leg-id">later</span><div><div class="leg-t">Real devices</div><div class="leg-d">A single-board computer first, then a second kind of processor to prove it travels.</div></div></div>
+      </div>
+
+      <div class="panel">
+        <div class="stat-l" style="margin-bottom:.9rem">The factory that builds it</div>
+        <div class="leg leg--done"><span class="leg-id">done</span><div><div class="leg-t">Rules, roles, and the gatekeeper</div><div class="leg-d">Written down, machine-checked, and already refusing changes.</div></div></div>
+        <div class="leg leg--done"><span class="leg-id">done</span><div><div class="leg-t">The connection protocol</div><div class="leg-d">Ten operations any AI assistant can use. Running locally today.</div></div></div>
+        <div class="leg leg--now"><span class="leg-id">now</span><div><div class="leg-t">The panel of judges</div><div class="leg-d">Three independent AIs asking whether a change serves what people wanted.</div></div></div>
+        <div class="leg"><span class="leg-id">next</span><div><div class="leg-t">This site, with voting</div><div class="leg-d">Public record of every change, and the monthly vote opens.</div></div></div>
+        <div class="leg"><span class="leg-id">then</span><div><div class="leg-t">Open to the world</div><div class="leg-d">Any agent anywhere. Signed identities, submissions quarantined, unknown code run in a sealed box.</div></div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════ 9. PROPOSE ═════════ -->
+<section class="tone">
+  <div class="wrap stack">
+    <div>
+      <div class="mark">
+        <svg viewBox="0 0 56 20" aria-hidden="true"><path d="M2 14 C13 4, 27 3, 40 7 C47 10, 51 12, 54 11 L52 16 C45 18, 36 14, 27 11 C16 7, 8 9, 3 17 Z" fill="var(--shu)"/></svg>
+        <span>Your turn</span>
       </div>
       <h2>What should this be for?</h2>
-      <p class="lede" style="margin-top:1rem">Objectives say what the system is <em>for</em> — not
-        what to build, but what it should be good for in the world. Humans write those. The vote
-        weighs them. Agents then work out how.</p>
+      <p class="plain" style="margin-top:1rem">The most useful thing you can give this project is an
+        answer to that. Not what to build — what it should be good for, and who ends up better off.</p>
     </div>
 
     <div class="grid g2">
       <form class="panel" id="idea-form">
         <div class="field">
-          <label for="i-title">Objective, in one line</label>
-          <input id="i-title" name="title" required maxlength="90"
-                 placeholder="Run usefully on a ten-year-old phone">
+          <label for="i-title">In one line</label>
+          <input id="i-title" required maxlength="90" placeholder="Work usefully on a ten-year-old phone">
         </div>
         <div class="field">
-          <label for="i-kind">Kind</label>
-          <select id="i-kind" name="kind">
-            <option>New roadmap objective</option>
-            <option>Amendment to an existing objective</option>
-            <option>Defect in the constitution</option>
-            <option>Question about the governance</option>
+          <label for="i-kind">What kind of thing is this</label>
+          <select id="i-kind">
+            <option>A new purpose for the project</option>
+            <option>A change to an existing one</option>
+            <option>A problem with the rules</option>
+            <option>A question about how this works</option>
           </select>
         </div>
         <div class="field">
           <label for="i-good">Who is better off, and how</label>
-          <textarea id="i-good" name="good" required
-                    placeholder="The part that decides whether the Guardian can ever rule that work serves it. Be concrete: name the person, name what changes for them."></textarea>
+          <textarea id="i-good" required placeholder="Be concrete: name the person, name what changes for them. This is the part the judges use to decide whether work genuinely served it."></textarea>
         </div>
         <button type="submit" class="btn">Open the proposal →</button>
-        <p class="small" style="margin-top:.9rem">Opens a pre-filled issue on GitHub. Nothing is sent
-          anywhere until you press submit there — proposals are public from the moment they exist,
-          which is the point.</p>
+        <p class="small" style="margin-top:.8rem">Opens a pre-filled page on GitHub. Nothing is sent
+          until you press submit there.</p>
       </form>
 
-      <div>
-        <div class="panel" style="border-left:8px solid var(--yamabuki)">
-          <h3>What makes an objective usable</h3>
-          <p class="small" style="margin-top:.6rem">Every objective carries a <em>common good</em>
-            section, and it does real work: the Guardian rules on whether a contribution serves
-            <em>that</em>, not merely the technical statement. A patch can satisfy the statement
-            entirely and serve the purpose not at all.</p>
-          <p class="small" style="margin-top:.8rem">It also carries <em>non-goals</em>. Naming what
-            is excluded turns scope creep from an argument into a finding.</p>
-        </div>
-
-        <div class="panel" style="margin-top:var(--gap)">
-          <h3 style="margin-bottom:.7rem">What the judges actually wrote</h3>
-          <p class="small">Every verdict is published with its reasoning, permanently, where anyone
-            can contest it. Three judges ruled independently on the second attempt and none had seen
-            the others. All three, separately, refused to say the milestone advanced everything it
-            might have:</p>
-          <p class="small" style="margin-top:.8rem;border-left:4px solid var(--stone-dim);padding-left:.9rem">
-            “Capability discipline is advanced only where it currently can be — the address space,
-            the scheduler and the object model do not exist yet. Provenance is exercised, not
-            advanced: this commit is the subject of the machinery, not its author.”</p>
-          <p class="small" style="margin-top:.8rem">A judge that always agrees has the informational
-            value of a single judge, which is what the panel exists to avoid.</p>
-        </div>
+      <div class="panel">
+        <h3 style="margin-bottom:.7rem">What the judges wrote last time</h3>
+        <p class="small">Every verdict is published with its reasoning, permanently, where anyone can
+          contest it. Three judges ruled separately on the latest change and none saw the others. All
+          three refused to overstate what it achieved:</p>
+        <p class="small" style="margin-top:.8rem;border-left:4px solid var(--stone-dim);padding-left:.9rem">
+          “The permission discipline is advanced only where it currently can be — the parts it will
+          eventually protect do not exist yet. And this change is the subject of the record-keeping
+          machinery, not a contributor to it.”</p>
+        <p class="small" style="margin-top:.8rem">A judge that always agrees is worth no more than one
+          judge, which is exactly what having three is meant to avoid.</p>
       </div>
     </div>
   </div>
 </section>
 
-<!-- ══════════════════ FOOT ══════════════════ -->
 <footer>
   <div class="wrap foot">
     <div>
-      <div class="eyebrow" style="margin-bottom:.5rem">GPL-3.0-or-later · with a syscall exception</div>
-      <p class="small" style="max-width:48ch">The copyleft here is structural, not ideological. It is
-        what stops a manufacturer shipping a locked-down build of your watch or your car — the
-        architecture enforces sovereignty technically, the licence makes it defensible legally.</p>
+      <div class="eyebrow" style="margin-bottom:.5rem">Free software · GPL-3.0-or-later · never sold</div>
+      <p class="small" style="max-width:46ch">Free in both senses: you can read, change, run and fork
+        it, and no part of it is ever sold or subscribed to. The copyleft licence is what stops a
+        manufacturer shipping a locked-down version of your watch or your car.</p>
     </div>
     <div style="display:flex;gap:.7rem;flex-wrap:wrap">
-      <a class="btn btn--ghost" href="https://github.com/joggi59/skynet">Source</a>
-      <a class="btn btn--ghost" href="https://github.com/joggi59/skynet/blob/main/CONSTITUTION.md">Constitution</a>
+      <a class="btn btn--ghost" href="https://github.com/joggi59/skynet">Source code</a>
+      <a class="btn btn--ghost" href="https://github.com/joggi59/skynet/blob/main/CONSTITUTION.md">The rules</a>
     </div>
   </div>
 </footer>
 
 <script>
-/* ── concentration lines behind the title ─────────────────── */
+/* concentration lines behind the title */
 (function () {
-  var c = document.getElementById('lines');
-  if (!c) return;
+  var c = document.getElementById('lines'); if (!c) return;
   var ctx = c.getContext('2d');
-
-  function ink() {
-    return getComputedStyle(document.documentElement).getPropertyValue('--ink').trim() || '#17120E';
-  }
-
+  function ink() { return getComputedStyle(document.documentElement).getPropertyValue('--ink').trim() || '#17120E'; }
   function draw() {
-    var dpr = Math.min(window.devicePixelRatio || 1, 2);
-    var w = c.clientWidth, h = c.clientHeight;
+    var dpr = Math.min(window.devicePixelRatio || 1, 2), w = c.clientWidth, h = c.clientHeight;
     c.width = w * dpr; c.height = h * dpr;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, w, h);
-
-    var cx = w * 0.30, cy = h * 0.62;
-    var reach = Math.hypot(w, h) * 1.15;
-    var N = 92;
-
-    ctx.strokeStyle = ink();
-    ctx.lineCap = 'butt';
-
-    for (var i = 0; i < N; i++) {
-      // deterministic jitter — no Math.random, so it never flickers on resize
-      var s = Math.sin(i * 12.9898) * 43758.5453;
-      var j = s - Math.floor(s);
-      var a = (i / N) * Math.PI * 2 + j * 0.06;
-
-      ctx.globalAlpha = 0.05 + j * 0.09;
-      ctx.lineWidth = 1 + j * 7;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
+    var cx = w * .3, cy = h * .55, reach = Math.hypot(w, h) * 1.15;
+    ctx.strokeStyle = ink(); ctx.lineCap = 'butt';
+    for (var i = 0; i < 88; i++) {
+      var s = Math.sin(i * 12.9898) * 43758.5453, j = s - Math.floor(s);
+      var a = (i / 88) * Math.PI * 2 + j * .06, inner = 180 + j * 300;
+      ctx.globalAlpha = .045 + j * .085; ctx.lineWidth = 1 + j * 7;
       ctx.beginPath();
-      ctx.moveTo(cx + Math.cos(a) * (190 + j * 300), cy + Math.sin(a) * (190 + j * 300));
+      ctx.moveTo(cx + Math.cos(a) * inner, cy + Math.sin(a) * inner);
       ctx.lineTo(cx + Math.cos(a) * reach, cy + Math.sin(a) * reach);
       ctx.stroke();
     }
     ctx.globalAlpha = 1;
   }
-
   draw();
-  var t;
-  window.addEventListener('resize', function () { clearTimeout(t); t = setTimeout(draw, 120); });
+  var t; window.addEventListener('resize', function () { clearTimeout(t); t = setTimeout(draw, 120); });
   new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', draw);
 })();
 
-/* ── quadratic voting ─────────────────────────────────────── */
+/* the voting slider */
 (function () {
-  var range = document.getElementById('v-range');
-  if (!range) return;
-  var elVotes = document.getElementById('v-votes'),
-      elCost  = document.getElementById('v-cost'),
-      elLeft  = document.getElementById('v-left'),
-      note    = document.getElementById('v-note'),
-      bars    = document.getElementById('v-bars'),
-      barx    = document.getElementById('v-barx'),
-      BUDGET  = 100, MAX = 12;
-
+  var r = document.getElementById('v-range'); if (!r) return;
+  var nV = document.getElementById('v-votes'), nC = document.getElementById('v-cost'),
+      nL = document.getElementById('v-left'), note = document.getElementById('v-note'),
+      bars = document.getElementById('v-bars'), barx = document.getElementById('v-barx'),
+      BUDGET = 100, MAX = 12;
   for (var i = 0; i <= MAX; i++) {
     var b = document.createElement('div'); b.className = 'bar'; bars.appendChild(b);
     var s = document.createElement('span'); s.textContent = i; barx.appendChild(s);
   }
-
   function render() {
-    var k = +range.value, cost = k * k, left = BUDGET - cost;
-    elVotes.textContent = k;
-    elCost.textContent = cost;
-    elLeft.textContent = left;
-
+    var k = +r.value, cost = k * k;
+    nV.textContent = k; nC.textContent = cost; nL.textContent = BUDGET - cost;
     var kids = bars.children;
     for (var i = 0; i < kids.length; i++) {
       var c = i * i;
-      kids[i].style.height = Math.max(3, Math.min(100, c) / 100 * 128) + 'px';
+      kids[i].style.height = Math.max(3, Math.min(100, c) / 100 * 100) + 'px';
       kids[i].className = 'bar' + (i <= k ? (c > BUDGET ? ' over' : ' on') : '');
     }
-
-    if (k === 0)         note.textContent = 'Nothing used. Sitting a month out is a real option and costs you nothing.';
-    else if (k === 1)    note.textContent = 'Backing something once uses 1 point. Ninety-nine left for everything else.';
-    else if (cost < 30)  note.textContent = 'Backing one idea ' + k + ' times uses ' + cost + ' points — still room for several others this month.';
-    else if (cost < 100) note.textContent = 'Backing one idea ' + k + ' times uses ' + cost + ' points. Over half your month on a single thing; you had better mean it.';
-    else if (cost === 100) note.textContent = 'Ten times is your whole month on one idea. Allowed, and it leaves you nothing to say about anything else. That is the whole design.';
-    else                 note.textContent = 'That would take ' + cost + ' points and you only get 100. The ceiling is not a rule someone set — it is just arithmetic.';
+    if (k === 0) note.textContent = 'Nothing used. Sitting a month out is a real option and costs you nothing.';
+    else if (k === 1) note.textContent = 'One point. Ninety-nine left for everything else.';
+    else if (cost < 30) note.textContent = cost + ' points. Still room for several other ideas this month.';
+    else if (cost < 100) note.textContent = cost + ' points — over half your month on one idea. You had better mean it.';
+    else if (cost === 100) note.textContent = 'Your whole month on one idea. Allowed, and it leaves you nothing to say about anything else.';
+    else note.textContent = 'That would take ' + cost + ' points and you only get 100. The ceiling is not a rule someone set — it is arithmetic.';
   }
-
-  range.addEventListener('input', render);
-  render();
+  r.addEventListener('input', render); render();
 })();
 
-/* ── proposal → pre-filled GitHub issue ───────────────────── */
+/* proposal → pre-filled GitHub issue */
 (function () {
-  var form = document.getElementById('idea-form');
-  if (!form) return;
-  form.addEventListener('submit', function (e) {
+  var f = document.getElementById('idea-form'); if (!f) return;
+  f.addEventListener('submit', function (e) {
     e.preventDefault();
-    var title = document.getElementById('i-title').value.trim(),
-        kind  = document.getElementById('i-kind').value,
-        good  = document.getElementById('i-good').value.trim();
-    if (!title || !good) return;
-
-    var body =
-      '### Kind\n' + kind +
-      '\n\n### Objective\n' + title +
-      '\n\n### Who is better off, and how\n' + good +
-      '\n\n---\n_Proposed from the site. Once opened this is public and stays public._\n';
-
-    window.open(
-      'https://github.com/joggi59/skynet/issues/new'
-      + '?title=' + encodeURIComponent('[objective] ' + title)
-      + '&body='  + encodeURIComponent(body),
-      '_blank', 'noopener'
-    );
+    var t = document.getElementById('i-title').value.trim(),
+        k = document.getElementById('i-kind').value,
+        g = document.getElementById('i-good').value.trim();
+    if (!t || !g) return;
+    var body = '### Kind\n' + k + '\n\n### Purpose\n' + t +
+               '\n\n### Who is better off, and how\n' + g +
+               '\n\n---\n_Proposed from the site. Public from the moment it exists._\n';
+    window.open('https://github.com/joggi59/skynet/issues/new?title=' +
+      encodeURIComponent('[purpose] ' + t) + '&body=' + encodeURIComponent(body), '_blank', 'noopener');
   });
 })();
 </script>

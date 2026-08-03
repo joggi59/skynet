@@ -26,7 +26,12 @@ impl PowerControl {
     /// entry level M0 supports — `boot.rs` parks anywhere else, precisely so
     /// this precondition cannot be falsified by the boot path that establishes
     /// it. See RFC-0001, O-3 (closed).
-    pub const unsafe fn new() -> Self {
+    ///
+    /// `pub(super)` for the reason on [`super::pl011::BootConsole::new`], and
+    /// more sharply here: this constructor takes no arguments, so a
+    /// crate-visible version hands the authority to power the machine off to
+    /// anyone willing to write `unsafe`.
+    pub(super) const unsafe fn new() -> Self {
         Self { _private: () }
     }
 }
@@ -39,12 +44,19 @@ impl hal::Power for PowerControl {
         // configuration the boot contract produces and the only one `boot.rs`
         // allows to reach here.
         //
-        // Clobbers follow the SMC calling convention: the call may write x0-x3,
-        // declared as outputs so the compiler does not assume they survive.
-        // SMCCC v1.0 additionally permits x4-x17 corruption, which is harmless
-        // here because the call is divergent — nothing after it reads a
-        // register. `nomem` holds because SYSTEM_OFF touches no memory this
-        // kernel can observe, `nostack` because it uses none.
+        // Clobbers: the call may write x0-x3, declared as outputs so the
+        // compiler does not assume they survive. SMCCC v1.0 additionally
+        // permits x4-x17 corruption, and this kernel never queries
+        // SMCCC_VERSION, so it must assume v1.0.
+        //
+        // Declaring only x0-x3 is nonetheless sound, for a reason that has to be
+        // stated rather than assumed: nothing is live across this call on either
+        // path. NOT "because the call is divergent" — the fall-through below
+        // exists precisely because it may return, and review caught the earlier
+        // wording contradicting itself four lines later.
+        //
+        // `nomem` holds because SYSTEM_OFF touches no memory this kernel can
+        // observe, `nostack` because it uses none.
         unsafe {
             asm!(
                 "hvc #0",

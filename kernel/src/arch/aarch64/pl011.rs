@@ -27,7 +27,13 @@ impl BootConsole {
     /// # Safety
     /// `base` must be the MMIO base of a PL011 that no other code touches, and
     /// this must be called at most once for that device.
-    pub const unsafe fn new(base: usize) -> Self {
+    ///
+    /// `pub(super)`, not `pub`. A crate-visible constructor lets any portable
+    /// module mint its own device and bypass the token it was handed; review
+    /// demonstrated exactly that against the merged M0. Visibility is what makes
+    /// "only the boot path creates devices" a property of the language instead
+    /// of an item on a review checklist.
+    pub(super) const unsafe fn new(base: usize) -> Self {
         Self { base: base as *mut u8 }
     }
 }

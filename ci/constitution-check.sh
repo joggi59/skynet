@@ -155,22 +155,39 @@ check_vector_alignment() {
         pending "kernel not built — run ci/build.sh first"
         return
     fi
-    if ! command -v nm >/dev/null 2>&1; then
-        pending "nm not available"
+    if ! command -v readelf >/dev/null 2>&1; then
+        pending "readelf not available"
         return
     fi
 
+    # The SECTION address, not a symbol name.
+    #
+    # An earlier version of this check looked up `vector_table` with nm. The
+    # contribution it was written for then dropped `#[no_mangle]` — for good
+    # reasons, since the unmangled symbol let portable code link to the handler —
+    # and the check went blind, reporting SKIP on an image that has a vector
+    # table. A check that stops seeing the thing it checks is worse than no
+    # check, because it reports success.
+    #
+    # The section address is what VBAR_EL1 is loaded with, and it does not depend
+    # on how Rust chose to name anything.
+    # Parsed relative to the PROGBITS marker, not by column position: readelf's
+    # columns shift with the section name's length, and the two-line default
+    # layout puts the SIZE where a column count expects the address. The first
+    # version of this parse reported the size as the address and failed a
+    # correctly aligned table.
     local addr
-    addr=$(nm "$bin" 2>/dev/null | grep -wE 'vector_table|__vectors' | head -1 | awk '{print $1}')
+    addr=$(readelf -SW "$bin" 2>/dev/null \
+           | awk '/[. ]vectors/ { for (i = 1; i <= NF; i++) if ($i == "PROGBITS") { print $(i+1); exit } }')
     if [ -z "$addr" ]; then
-        skip "no vector table symbol in the image yet"
+        skip "no .vectors section in the image yet"
         return
     fi
 
     if python3 -c "import sys; sys.exit(0 if int('$addr',16) % 2048 == 0 else 1)"; then
-        pass "vector table at 0x$addr is 2 KiB aligned"
+        pass "vector table section at 0x$addr is 2 KiB aligned"
     else
-        fail "vector table at 0x$addr is NOT 2 KiB aligned"
+        fail "vector table section at 0x$addr is NOT 2 KiB aligned"
         detail "VBAR_EL1's low 11 bits are RES0 — the processor will truncate this"
         detail "address and vector somewhere else, silently, with no fault and no warning"
     fi

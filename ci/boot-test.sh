@@ -6,11 +6,12 @@
 #   ci/boot-test.sh --gdb      boot halted with a gdb stub on :1234
 #   ci/boot-test.sh --contract print the boot contract and exit
 #
-# The contract, in three parts:
+# The contract, in four parts:
 #
 #   1. the kernel prints SKYNET_BOOT_OK on the PL011 console
-#   2. it then shuts down through PSCI SYSTEM_OFF, so QEMU exits 0
-#   3. it does all of that within the timeout
+#   2. it prints neither SKYNET_PANIC nor SKYNET_FAULT
+#   3. it then shuts down through PSCI SYSTEM_OFF, so QEMU exits 0
+#   4. it does all of that within the timeout
 #
 # Part 2 is what makes this automatable. A kernel that spins forever after
 # printing cannot be distinguished from one that hung, so "it printed something"
@@ -29,6 +30,7 @@ print_contract() {
     heading "Boot contract"
     info "marker    $BOOT_MARKER          must be printed"
     info "panic     $PANIC_MARKER            must NOT be printed"
+    info "fault     $FAULT_MARKER            must NOT be printed"
     info "machine   qemu-system-aarch64 -M $QEMU_MACHINE -cpu $QEMU_CPU -m $QEMU_RAM"
     info "shutdown  PSCI SYSTEM_OFF (hvc #0, x0 = 0x84000008) -> QEMU exits 0"
     info "timeout   ${BOOT_TIMEOUT_SECONDS}s"
@@ -36,7 +38,9 @@ print_contract() {
     info "QEMU virt specifics the kernel may rely on:"
     detail "RAM base            0x40000000  (link at 0x40080000)"
     detail "PL011 UART0         0x09000000  (UARTDR at offset 0; usable with no init under QEMU)"
-    detail "entry state         x0 = device tree blob pointer, EL1 (virtualization=off)"
+    detail "entry state         ALL general-purpose registers ZERO, EL1 (virtualization=off)"
+    detail "                    x0 is NOT a device tree pointer for an ELF image — QEMU treats"
+    detail "                    ELF as non-Linux and never writes the bootloader stub. RFC-0001 O-2."
     detail "PSCI conduit        HVC"
 }
 
@@ -108,6 +112,16 @@ run_boot() {
         grep -F -A3 "$PANIC_MARKER" "$out" | sed 's/^/             /' | head -8
     else
         pass "no panic"
+    fi
+
+    # 1c. no hardware fault. Same hazard, discovered one contribution later: a
+    # fault used to hang and be caught by the timeout, and now reports and
+    # powers off cleanly, so every other check here would pass.
+    if grep -qF "$FAULT_MARKER" "$out"; then
+        fail "kernel took a fault — '$FAULT_MARKER' found on the console"
+        grep -F -A5 "$FAULT_MARKER" "$out" | sed 's/^/             /' | head -10
+    else
+        pass "no fault"
     fi
 
     # 2. and 3. the shutdown

@@ -152,10 +152,11 @@ kernel_exists() { [ -f "$REPO_ROOT/kernel/Cargo.toml" ]; }
 
 BOOT_MARKER='SKYNET_BOOT_OK'
 PANIC_MARKER='SKYNET_PANIC'
+FAULT_MARKER='SKYNET_FAULT'
 QEMU_MACHINE='virt'
 QEMU_CPU='cortex-a72'
 BOOT_TIMEOUT_SECONDS=30
-export BOOT_MARKER PANIC_MARKER QEMU_MACHINE QEMU_CPU BOOT_TIMEOUT_SECONDS
+export BOOT_MARKER PANIC_MARKER FAULT_MARKER QEMU_MACHINE QEMU_CPU BOOT_TIMEOUT_SECONDS
 
 # On PANIC_MARKER, per RFC-0001:
 #
@@ -167,6 +168,15 @@ export BOOT_MARKER PANIC_MARKER QEMU_MACHINE QEMU_CPU BOOT_TIMEOUT_SECONDS
 # then shuts down; the boot test requires BOOT_MARKER present AND PANIC_MARKER
 # absent. This fails closed in both directions: a panic before the marker fails
 # on the missing marker, a panic after it fails on the panic marker.
+#
+# FAULT_MARKER exists for the same reason, and was missing for one contribution.
+# Before exception vectors, a hardware fault hung the machine and the timeout
+# caught it. After them, a fault prints a report and shuts down cleanly through
+# PSCI — so the boot test saw its marker, no panic, and exit 0, and reported
+# three passes on a kernel that had just taken a data abort.
+#
+# Adding fault reporting made CI blind to faults. Found by reviewer-constitution,
+# which ran this script against a faulting kernel rather than reasoning about it.
 
 kernel_binary() {
     local target; target="$(profile_target)"

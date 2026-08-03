@@ -247,13 +247,25 @@ do_merge() {
         | sort -z | xargs -0 cat 2>/dev/null | sha256sum | cut -d' ' -f1)
 
     local reviewers guardians
+    # Findings are recorded, not only reasoning.
+    #
+    # The ledger previously kept the prose and discarded the findings array. For
+    # invariants that are not yet mechanically enforced — capability confinement
+    # until M4, user sovereignty until M5 — the reviewers ARE the enforcement,
+    # and their findings are the only record that anyone examined the question.
+    # Dropping them meant every such judgement between G0 and M4 was thrown away
+    # at the moment it became permanent. Found by reviewer-constitution on the
+    # first contribution, which had to write its whole argument into the prose
+    # field to survive.
     reviewers=$(python3 -c "
 import json,glob,os
 out=[]
 for f in sorted(glob.glob('$C_DIR/verdicts/reviewer-*.json')):
     d=json.load(open(f))
     out.append({'role':d['role'],'verdict':d['verdict'],
-                'confidence':d.get('confidence'),'reasoning':d.get('reasoning','')})
+                'confidence':d.get('confidence'),
+                'findings':d.get('findings',[]),
+                'reasoning':d.get('reasoning','')})
 print(json.dumps(out))")
     guardians=$(python3 -c "
 import json,glob
@@ -262,6 +274,8 @@ for f in sorted(glob.glob('$C_DIR/verdicts/guardian-*.json')):
     d=json.load(open(f))
     out.append({'verdict':d['verdict'],'confidence':d.get('confidence'),
                 'serves_common_good':d.get('serves_common_good'),
+                'within_non_goals':d.get('within_non_goals'),
+                'findings':d.get('findings',[]),
                 'reasoning':d.get('reasoning','')})
 print(json.dumps(out))")
 

@@ -194,6 +194,60 @@ check_vector_alignment() {
 }
 
 # ---------------------------------------------------------------------------
+# Invariant 1, the part that can be checked before M4 — where authority is minted.
+#
+# Three consecutive cycles closed one route into the failure module and revealed
+# another: pub constructors, then pub fail_stop, then pub fault_stop, then a
+# link_name route to the mangled symbol. Each fix was correct and each was
+# discovered by a reviewer compiling the counter-example, because nothing
+# mechanical was watching.
+#
+# reviewer-constitution named the shape of the problem — "the ratchet has no
+# detent" — and wrote this check to demonstrate it was buildable. It was right
+# that it was, and right that it should have existed already.
+#
+# This does not enforce invariant 1. Invariant 1 needs capabilities, which arrive
+# at M4. What it enforces is narrower and useful now: authority is minted only
+# where the design says it is, and a new site has to be argued for rather than
+# discovered later by someone writing a probe.
+# ---------------------------------------------------------------------------
+check_minting_sites() {
+    heading "Invariant 1 (partial) — where authority is minted"
+    if ! kernel_exists; then
+        pending "no kernel yet; the full invariant is enforced from M4"
+        return
+    fi
+
+    # The constructors that hand out authority over a device.
+    local minters='BootConsole::new|PowerControl::new'
+    # The files the design permits to call them, and why.
+    local allowed='kernel/src/arch/aarch64/(boot|fail)\.rs'
+
+    local hits violations=0
+    hits=$(grep -rnE "($minters)" kernel/src --include='*.rs' 2>/dev/null \
+           | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(//|///|\*)' \
+           | grep -vE "^$allowed:" || true)
+
+    if [ -n "$hits" ]; then
+        fail "authority minted outside boot.rs and fail.rs"
+        while IFS= read -r h; do detail "$h"; done <<< "$hits"
+        detail "the design permits exactly two: the boot path, and the failure path"
+        violations=1
+    fi
+
+    # Count them, so a site appearing inside an allowed file is visible too. A
+    # number that changes without an RFC saying why is the ratchet turning.
+    local n
+    n=$(grep -rnE "($minters)" kernel/src --include='*.rs' 2>/dev/null \
+        | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(//|///|\*)' | grep -c . || true)
+
+    if [ "$violations" -eq 0 ]; then
+        pass "authority minted only in boot.rs and fail.rs — $n call site(s)"
+        detail "a change to that count belongs in an RFC before it belongs in a diff"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Invariant 3 — total provenance
 # The ledger must be well-formed and append-only.
 # ---------------------------------------------------------------------------
@@ -372,6 +426,7 @@ run_all() {
     check_prose_sync
     check_provenance
     check_vector_alignment
+    check_minting_sites
     check_hal_boundary
     check_no_kernel_deps
     check_english
@@ -401,6 +456,7 @@ main() {
                 no-kernel-deps)  check_no_kernel_deps ;;
                 english)         check_english ;;
                 vector-alignment) check_vector_alignment ;;
+                minting-sites)   check_minting_sites ;;
                 zero-telemetry)  check_pending_invariant "zero_telemetry" 5 "M6" \
                                      "no outbound path can be verified absent before a network stack exists" ;;
                 electorate)      check_pending_invariant "agents_do_not_vote" 9 "G3" \

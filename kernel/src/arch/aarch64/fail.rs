@@ -7,6 +7,8 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use crate::hal::{self, Console, Cpu, Power};
 
 use super::cpu::Processor;
+use super::exception::{class_name, elr_is_indicative_only, far_is_meaningful, Slot};
+use super::hex;
 use super::pl011::BootConsole;
 use super::platform;
 use super::psci::PowerControl;
@@ -76,6 +78,113 @@ impl hal::FailStop for Failure {
         console.write(bytes);
         // SAFETY: as above — reached only after the kernel has failed, from a
         // path that never returns, at EL1 where the HVC conduit is valid.
+        unsafe { PowerControl::new() }.off()
+    }
+}
+
+impl Failure {
+    /// Report a hardware fault, then stop. Does not return.
+    ///
+    /// Behind the same [`IN_FAILURE`] guard as [`hal::FailStop::fail_stop`], and
+    /// minting through the same call. This is deliberate and is the reason the
+    /// fault path lives in this module rather than in `exception.rs`: review
+    /// found that closing the constructor reach-around left `fail_stop` itself
+    /// reachable — the hole moved rather than closing. A second minting site
+    /// would move it again. One module mints devices, and that claim stays true.
+    ///
+    /// The guard covers a fault raised from inside this function, which is the
+    /// storm review measured at 10,262,934 exceptions in four seconds and the
+    /// gap it flagged in the panic-only guard.
+    ///
+    /// # Why this writes runtime data when `fail_stop` may not
+    ///
+    /// `fail_stop` takes `&'static [u8]` because a panic message is program text
+    /// that could contain anything a future author puts there. A fault report is
+    /// register values — facts about the machine, chosen by this code and not by
+    /// a caller. Different data, different argument, and the second does not
+    /// license the first.
+    ///
+    /// # Safety
+    /// Callable only from an exception vector. Aliases a console owned
+    /// elsewhere, sound only because the kernel has already failed and no other
+    /// code will run again.
+    pub unsafe fn fault_stop(slot: Option<Slot>, esr: u64, far: u64, elr: u64) -> ! {
+        if IN_FAILURE.swap(true, Ordering::Relaxed) {
+            // Already failing. A fault inside the failure path lands here and
+            // stops, instead of vectoring again into the same code.
+            Processor::halt()
+        }
+
+        // SAFETY: as for `fail_stop` — the kernel has failed, this never
+        // returns, and the guard above makes the "at most once" clause true of
+        // this function too.
+        let mut console = unsafe { BootConsole::new(platform::UART0_BASE) };
+        let mut put = |b: u8| console.write(&[b]);
+
+        put(b'\n');
+        for &b in b"SKYNET_FAULT\r\n  slot  " {
+            put(b);
+        }
+        match slot {
+            Some(s) => {
+                for &b in s.name() {
+                    put(b);
+                }
+            }
+            // The index came from the vector table's own immediate, so this is
+            // unreachable — and it is reported rather than assumed away.
+            None => {
+                for &b in b"unknown index " {
+                    put(b);
+                }
+            }
+        }
+
+        for &b in b"\r\n  esr   " {
+            put(b);
+        }
+        hex::write_u32(&mut put, esr);
+        if let Some(name) = class_name(esr) {
+            for &b in b"  " {
+                put(b);
+            }
+            for &b in name {
+                put(b);
+            }
+        } else {
+            for &b in b"  unrecognised class ec=" {
+                put(b);
+            }
+            hex::write_hex(&mut put, (esr >> 26) & 0x3f, 2);
+        }
+
+        for &b in b"\r\n  far   " {
+            put(b);
+        }
+        hex::write_u64(&mut put, far);
+        if !far_is_meaningful(esr) {
+            for &b in b"  (stale: no address for this class)" {
+                put(b);
+            }
+        }
+
+        for &b in b"\r\n  elr   " {
+            put(b);
+        }
+        hex::write_u64(&mut put, elr);
+        if elr_is_indicative_only(esr) {
+            // RFC-0002, O-2. SError is asynchronous: it may be raised long after
+            // whatever caused it, so this address says where execution was, not
+            // what went wrong.
+            for &b in b"  (asynchronous: where execution was, not the cause)" {
+                put(b);
+            }
+        }
+        put(b'\r');
+        put(b'\n');
+
+        // SAFETY: as above — after a failure, on a path that never returns, at
+        // EL1 where the HVC conduit is valid.
         unsafe { PowerControl::new() }.off()
     }
 }

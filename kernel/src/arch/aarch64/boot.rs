@@ -85,9 +85,23 @@ unsafe extern "C" fn _start() -> ! {
         "movz x9, #0x0800",
         "movk x9, #0x30d0, lsl #16",
         "msr  sctlr_el1, x9",
-        // Writing SCTLR_EL1 is a context-changing operation; without the
-        // barrier the processor may already have fetched under the old
-        // configuration.
+
+        // Take control of faults before running any Rust.
+        //
+        // VBAR_EL1 holds whatever reset left there — zero on QEMU virt — so
+        // until this write, any exception vectors into the middle of .text and
+        // executes what it finds. Review measured that: 10,262,934
+        // undefined-instruction exceptions in four seconds, silently.
+        //
+        // The window between reset and here cannot be closed without firmware,
+        // which M0's non-goals exclude. It is a handful of instructions long.
+        "adrp x9, {vectors}",
+        "add  x9, x9, #:lo12:{vectors}",
+        "msr  vbar_el1, x9",
+
+        // Writing SCTLR_EL1 and VBAR_EL1 are context-changing operations;
+        // without the barrier the processor may already have fetched under the
+        // old configuration. One isb covers both.
         "isb",
 
         "mov  sp, x12",
@@ -100,6 +114,7 @@ unsafe extern "C" fn _start() -> ! {
         "    b    4b",
 
         rust = sym boot_rust,
+        vectors = sym super::exception::vector_table,
     )
 }
 

@@ -113,7 +113,13 @@ have_rust_target() {
         [ -d "/usr/lib/rustlib/$t" ]
 }
 
-have_qemu() { command -v qemu-system-aarch64 >/dev/null 2>&1; }
+# The emulator. Overridable so a machine that has QEMU somewhere other than the
+# system path can still run the boot test — the check is what matters, not where
+# the binary came from. Provenance records the digest of what ran, not its path.
+QEMU_BIN="${SKYNET_QEMU:-qemu-system-aarch64}"
+export QEMU_BIN
+
+have_qemu() { command -v "$QEMU_BIN" >/dev/null 2>&1 || [ -x "$QEMU_BIN" ]; }
 
 kernel_exists() { [ -f "$REPO_ROOT/kernel/Cargo.toml" ]; }
 

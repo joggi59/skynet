@@ -68,15 +68,21 @@ run_boot() {
     # -display none -serial stdio rather than -nographic: -nographic
     # multiplexes the QEMU monitor onto the same stream, which corrupts console
     # output and makes marker detection unreliable.
+    # -nic none: the virt machine attaches a virtio-net device by default, which
+    # needs an option ROM that is packaged separately from QEMU's core. M0 has
+    # no network stack and the boot contract does not mention one, so the device
+    # is pure noise in this test — and a missing ROM file would fail the boot
+    # for a reason that has nothing to do with the kernel.
     local rc=0
     timeout --foreground "$BOOT_TIMEOUT_SECONDS" \
-        qemu-system-aarch64 \
+        "$QEMU_BIN" \
             -M "$QEMU_MACHINE" \
             -cpu "$QEMU_CPU" \
             -m "$QEMU_RAM" \
             -display none \
             -serial stdio \
             -no-reboot \
+            -nic none \
             -kernel "$bin" \
         > "$out" 2>&1 || rc=$?
 

@@ -90,14 +90,15 @@ kernel/
 ├── .cargo/config.toml      OPTIONAL, and may contain only [build] target = "..."
 └── src/
     ├── main.rs             #![no_std] #![no_main]; kernel_main; the boot marker
-    ├── hal.rs              the portable contract: Console, Power, Cpu, BootResources
-    ├── panic.rs            #[panic_handler]
+    ├── hal.rs              the portable contract: Console, Power, Cpu, FailStop, BootResources
+    ├── panic.rs            #[panic_handler]; the panic marker
     └── arch/
         ├── mod.rs          architecture selection (arch-selection point 2 of 2)
         └── aarch64/
             ├── mod.rs      assembles the aarch64 implementation of the contract
             ├── boot.rs     _start, exception-level handling, .bss, stack, handoff
             ├── cpu.rs      Processor: halt
+            ├── fail.rs     Failure: the panic path's narrow authority
             ├── pl011.rs    BootConsole
             ├── psci.rs     PowerControl
             ├── platform.rs QEMU virt address constants
@@ -261,35 +262,54 @@ no `eh_personality` lang item is required.
 `kernel/src/panic.rs`:
 
 ```rust
-use crate::arch::Processor;
-use crate::hal::Cpu;
+use crate::arch::Failure;
+use crate::hal::FailStop;
 
-/// Stop. Print nothing; power nothing off.
+/// The bytes that mean "this kernel failed".
+///
+/// Defined by PANIC_MARKER in ci/lib.sh; ci/boot-test.sh fails the run if it
+/// appears. A compile-time constant and nothing else: no formatting, no
+/// `PanicInfo`, no private state on the wire.
+const PANIC_MARKER: &[u8] = b"SKYNET_PANIC\n";
+
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
-    Processor::halt()
+    // SAFETY: reached only from the panic handler, which never returns. No
+    // other code will run again, so aliasing the boot console is sound.
+    unsafe { Failure::fail_stop(PANIC_MARKER) }
 }
 ```
 
 The panic handler is the one place the language forces a global entry point: it is called with a
-`&PanicInfo` and nothing else, so it cannot be handed a console. M0 resolves that by giving it no
-authority to need. Three reasons, in order of weight:
+`&PanicInfo` and nothing else, so it cannot be handed a console. This design gives it the narrowest
+authority that satisfies the contract rather than the most convenient one.
 
-1. Printing would require a console reachable without being handed over. At M0 that means a `static`,
-   which is precisely the structure invariant 1 exists to forbid, introduced in the first commit and
-   in the one function that can never be refactored away.
-2. Powering off would be worse than useless: `ci/boot-test.sh` decides success from the marker plus
-   QEMU's exit code, so a panic *after* the marker was written would exit 0 and be scored a pass.
-   Halting makes that case time out and fail. A panic marker in the console output would fix the
-   scoring, but only by requiring a change to `ci/boot-test.sh`, which neither the architect nor the
-   implementer may make; a design whose correctness depends on an edit outside its own authority is
-   not a design M0 can be judged against.
-3. Halting is what a kernel should do on a panic on real hardware. Power-off is a policy decision
-   belonging to the operator, and the operator does not exist yet.
+**Why it announces itself rather than halting silently.** The boot contract in `ci/lib.sh` now names
+`PANIC_MARKER` and requires `BOOT_MARKER` present *and* `PANIC_MARKER` absent. That is worth the
+machinery, because the two failure shapes it catches are otherwise both bad: a panic that halts is
+caught by the 30-second timeout, correctly but slowly and with nothing in the log to read, while a
+panic that shuts down cleanly exits 0 and is indistinguishable from success to a test checking only
+the exit code. With the marker, a panic before the boot marker fails on the missing boot marker and a
+panic after it fails on the panic marker — fail-closed in both directions, in milliseconds, with a
+legible reason. `ci/boot-test.sh --gdb` is then for diagnosis, not for discovering that something went
+wrong at all.
 
-The cost is real and stated plainly: at M0 a panic is silent, and a failed boot looks like a hang.
-The mitigation available today is `ci/boot-test.sh --gdb`, which the script already provides. Open
-question O-4 records what a diagnostic path must look like when it arrives.
+**Why it does not print the panic message.** `_info` is ignored. Formatting it would pull `core::fmt`
+into the kernel image, and it would put whatever a future panic string happens to contain onto an
+outward channel. The marker is a compile-time constant, which keeps invariant 5 exactly true and the
+image small. Richer diagnostics need a design, not a `write!` — see O-4.
+
+**Why it powers the machine off.** Because the contract says "prints PANIC_MARKER and then shuts
+down", and because with the marker present the shutdown is what turns a 30-second CI timeout into an
+immediate failure. It is a bring-up behaviour, not a product behaviour: a kernel in a car should
+reset under a watchdog, not power off. That is recorded as O-8 rather than quietly inherited.
+
+**What this costs, stated for reviewer-constitution.** `fail_stop` mints a console from a compile-time
+address instead of receiving one. That is the single place in the kernel where authority is created
+outside the boot path, and it is bounded deliberately: one function, one caller, one compile-time
+constant written, never returns, not a `Console`, and unusable for ordinary output. The full argument
+is in the invariant 1 section below, including why it is not the same thing as a global console and
+what would make it become one.
 
 ### 4. The aarch64 implementation
 
@@ -486,6 +506,29 @@ impl hal::Cpu for Processor {
 `wfi` rather than a spin: it is what the instruction is for, and a bare `loop {}` would trip
 `clippy::empty_loop` under `-D warnings`.
 
+**`arch/aarch64/fail.rs`** — the failure path, and the only place outside `boot_rust` that mints a
+device:
+
+```rust
+pub struct Failure;
+
+impl hal::FailStop for Failure {
+    /// # Safety
+    /// Callable only from the panic handler. See RFC-0001, invariant 1.
+    unsafe fn fail_stop(bytes: &[u8]) -> ! {
+        // SAFETY: the kernel has already failed and this function never
+        // returns, so no other owner of the PL011 or of PSCI will run again.
+        // Aliasing them here cannot race with anything.
+        let mut console = unsafe { BootConsole::new(platform::UART0_BASE) };
+        console.write(bytes);
+        unsafe { PowerControl::new() }.off()
+    }
+}
+```
+
+Four lines, no static, no accessor, no formatting. `PowerControl::off` ends in `Processor::halt()`,
+so a machine whose PSCI call does not honour `SYSTEM_OFF` stops rather than continuing after a panic.
+
 ### 5. Linker script
 
 `kernel/src/arch/aarch64/link.ld`:
@@ -671,9 +714,12 @@ of opinion:
   unaligned accesses, which would fault in that state.
 - **FP and SIMD.** The target is softfloat with `-neon`, so no FP or SIMD instructions are emitted
   and `CPACR_EL1` is never touched.
-- **Formatted output.** No `core::fmt`, no `write!`, no `print!` macro, no `console.rs`. M0 writes one
-  constant byte string. `core::fmt` is a size cost, and in macro form it is the usual vector for a
-  global console — see the invariant 1 discussion.
+- **Formatted output.** No `core::fmt`, no `write!`, no `print!` macro, no `console.rs`. M0 writes two
+  constant byte strings, one on success and one on failure, and never formats anything. `core::fmt`
+  is a size cost, in macro form it is the usual vector for a global console, and in the panic path it
+  is an outward channel carrying whatever the failure was holding — see invariants 1 and 5.
+- **Panic diagnostics.** `PanicInfo` is ignored: no message, no file, no line, no backtrace. The
+  panic path emits its marker and stops. See O-4.
 - **Unit tests and a `kernel/tests/` directory.** `ci/build.sh --test` runs `cargo test` for the
   *host*, which a `no_std`/`no_main` binary crate cannot satisfy. M0 defines no `#[cfg(test)]`, so the
   check reports SKIP, which is honest: there is no portable logic here to test on a host, and the
@@ -778,21 +824,50 @@ any capability system can exist and is unreachable afterwards — `_start` is en
 and `boot_rust` never returns. The exemption is used for the code that genuinely precedes
 capabilities and for nothing else.
 
+**The one exception, named rather than buried.** `FailStop::fail_stop` mints a console and a
+`PowerControl` from compile-time constants instead of receiving them. It is the only place in the
+kernel that creates authority outside the boot path, and it exists because `#[panic_handler]` is the
+one function signature the language will not let anything be passed to.
+
+The case for allowing it is that it is the mirror image of the bootstrap exemption. Bootstrap code is
+exempt because it runs before capabilities can exist and is unreachable afterwards; `fail_stop` runs
+after everything else has stopped mattering and is likewise unreachable afterwards — it never
+returns, and by the time it runs the kernel has already failed. It is also bounded in every direction
+that matters:
+
+- one function, called from one place, which is the panic handler;
+- it emits one compile-time constant and cannot be asked to emit anything else, because the only
+  caller passes `PANIC_MARKER` and there is no second caller;
+- it is not a `Console` and does not implement `Console`, so it cannot be used for ordinary output;
+- it never returns, so nothing can be built on top of it;
+- there is still no `static`, no accessor and no namespace to walk. Nothing *reaches* authority
+  through it; it does one terminal thing.
+
+The case against it, which a reviewer is entitled to press: it establishes that kernel code may
+construct a device from an address constant when it finds that convenient. If that pattern is used a
+second time, ownership has stopped meaning anything and this RFC's whole invariant 1 argument
+collapses. **The rule this design asserts is that `fail_stop` is the only such site, and that a
+second one is not a code review comment but a design failure requiring an RFC.** Mechanically, that
+rule is criterion C23: `BootConsole::new` and `PowerControl::new` have exactly two call sites between
+them each, in `boot.rs` and `fail.rs`, and nowhere else.
+
 **Answering the question directly — when the capability system exists, will this have to be
 rewritten?** `hal::Console` and `hal::Power` become the interfaces a capability *wraps*; the traits
 survive. `BootResources` is replaced by whatever mints the initial capability set, a change to one
-struct and one call site. `Power::off(self)` is already the right shape. The panic path needs no
-revisiting because it holds nothing. The piece that will need real work is the eventual diagnostic
-console, which is why O-4 flags it before it is built rather than after.
+struct and one call site. `Power::off(self)` is already the right shape. `FailStop` survives as-is,
+because the failure path is precisely where a capability check is indefensible — a check that can
+itself fail is worse than no check when the thing being reported is that the kernel has already
+failed. The piece that will need real work is the eventual richer diagnostic path, which is why O-4
+flags it before it is built rather than after.
 
 ### Invariant 2 — User sovereignty *(pending, enforced from M5)*
 
-*See.* The only thing this kernel emits is a fixed 15-byte constant on the console the operator is
-already watching. There is no hidden channel, no retained state, no persistence of any kind. The one
-tension runs the other way: a panic at M0 produces no output, so an operator watching the console
-sees a machine that stopped without saying why. That does not make "see" harder to *guarantee* later
-— no mechanism is being built that would have to be undone — but it is a gap in what is visible
-today, and O-4 exists because of it.
+*See.* This kernel emits exactly two things, both compile-time constants, both on the console the
+operator is already watching: `SKYNET_BOOT_OK` when it is alive and `SKYNET_PANIC` when it is not.
+There is no hidden channel, no retained state, no persistence of any kind, and no third path by which
+anything else could reach the console. A machine that stops says so, which is the smallest honest
+version of "see" that M0 can provide. What it does not yet say is *why* it stopped; that needs a
+diagnostic design rather than a `write!`, and it is O-4.
 
 *Revoke.* The design creates no cached authority. A device token is held by exactly one owner, in one
 place, reachable through the call graph rather than through a global. That is the precondition for
@@ -810,12 +885,18 @@ nothing creates a code path that could later become conditional on one.
 
 There is no network stack and no outbound path other than the boot console, which is the operator's
 own terminal. Worth stating plainly because it will matter later: the boot console *is* an outward
-channel. At M0 it carries exactly one compile-time constant, chosen by CI and visible in the source.
-It is already modelled as an owned resource rather than an ambient one, which is what will make it
-possible to place it behind a capability at M6 instead of discovering it is everywhere.
+channel. At M0 it carries exactly two compile-time constants, both named by CI and both visible in
+the source. It is already modelled as an owned resource rather than an ambient one, which is what
+will make it possible to place it behind a capability at M6 instead of discovering it is everywhere.
+
+The panic path is where this invariant would normally start leaking, and the design closes it
+deliberately: `_info` is ignored, so no panic message, no source location, no register state and no
+value from the failing computation reaches the wire. A panic emits the same fourteen bytes whatever
+caused it. That is also why `core::fmt` is absent — a formatter in the failure path is a channel that
+carries whatever the failure happened to be holding.
 
 No counters, no timing measurements, no diagnostic accumulators. `overflow-checks = true` produces a
-halt, not a report.
+panic marker and a shutdown, not a report.
 
 ### Invariant 3 — Total provenance *(enforced now)*
 
@@ -837,7 +918,7 @@ All identifiers, comments and documents in English.
 | C1 | `ci/build.sh` | PASS; `kernel/target/aarch64-unknown-none-softfloat/release/skynet-kernel` exists |
 | C2 | `ci/build.sh --lint` | PASS; clippy clean under `-D warnings` |
 | C3 | `ci/build.sh --test` | SKIP (no unit tests at M0). Must not FAIL |
-| C4 | `ci/boot-test.sh` | Two PASS lines: marker printed, QEMU exited 0 |
+| C4 | `ci/boot-test.sh` | PASS on all three: `SKYNET_BOOT_OK` present, `SKYNET_PANIC` absent, QEMU exited 0 |
 | C5 | `ci/build.sh --size` | PASS |
 | C6 | `SKYNET_PROFILE=nano ci/build.sh --size` | PASS — under 196608 bytes |
 | C7 | `ci/constitution-check.sh --check hal-boundary` | PASS |
@@ -850,6 +931,8 @@ All identifiers, comments and documents in English.
 - C10. `grep -rn 'target_arch' kernel/src kernel/build.rs` returns exactly two locations:
   `kernel/src/arch/mod.rs` and `kernel/build.rs` (as `CARGO_CFG_TARGET_ARCH`).
 - C11. `grep -rc 'SKYNET_BOOT_OK' kernel/src` totals 1, and the hit is in `kernel/src/main.rs`.
+  `grep -rc 'SKYNET_PANIC' kernel/src` totals 1, and the hit is in `kernel/src/panic.rs`. Both
+  markers live in portable code, because both are project contracts rather than facts about aarch64.
 - C12. `python3 -c "import tomllib;d=tomllib.load(open('kernel/Cargo.toml','rb'));print([k for k in d
   if 'dependencies' in k])"` prints `[]`.
 - C13. `grep -c '^\[\[package\]\]' kernel/Cargo.lock` is 1.

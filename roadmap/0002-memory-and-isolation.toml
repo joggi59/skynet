@@ -1,0 +1,109 @@
+# Roadmap objective 0002
+#
+# Opened because a Guardian ruling on C-0004 observed that the contribution was
+# filed outside its objective's declared milestone list: objective 0001 declares
+# kernel = ["M0"], and the work was M1. It approved anyway — 0001 was the only
+# active objective, so rejecting would have left legitimate work unmandatable —
+# and recorded the gap with force:
+#
+#   "Drift becomes invisible through a boundary that quietly stops being
+#    checked, and the next M1 contribution under 0001 should meet an opened M1
+#    objective, not a third precedent."
+#
+# This is that objective. It is seeded rather than voted, like 0001, and says so.
+
+[objective]
+id = "0002"
+title = "Memory, and the ground isolation stands on"
+status = "active"
+opened = "2026-08-04"
+author = "johan"
+author_kind = "human"
+follows = "0001"
+
+statement = """
+Give the kernel a truthful account of the memory it has, the ability to hand
+parts of it out without losing track, and the machinery to make one piece of
+software unable to reach another's.
+
+Concretely: exception handling, a physical frame allocator, page tables and the
+MMU, and a kernel heap — in that order, because each one is unusable without the
+one before it.
+"""
+
+common_good = """
+Every promise this project makes to the person holding the device reduces, in the
+end, to one physical fact: that software cannot reach memory it was not given.
+
+Not "should not". Cannot. An agent on a watch that can read any address can read
+the health data, the keys and the ledger that is supposed to hold it accountable,
+whatever the capability system says about it — because a capability check is code,
+and code that shares an address space with what it is checking is a suggestion.
+
+Memory management is where isolation stops being a design and becomes a property
+of the hardware. The page tables are what make "this program cannot see that
+memory" true in the way that gravity is true.
+
+That is why this objective comes second and why it cannot be skipped or deferred:
+
+  User sovereignty (see, revoke, refuse) needs a ledger the software being
+  audited cannot rewrite. That needs memory it cannot reach.
+
+  Capabilities need to be unforgeable. A capability is unforgeable when the
+  holder cannot fabricate one, which means it cannot write the table they live
+  in, which is an address space question before it is a design question.
+
+  Mixed-criticality partitioning — the guarantee a car needs, that a braking task
+  is never starved by an agent — is scheduling on top of isolation. Without the
+  second, the first is a priority number and a hope.
+
+There is a second, quieter good in it. A kernel that reports its faults legibly
+is a kernel other people can contribute to. The alternative — a silent hang and a
+thirty-second CI timeout — is a project only its authors can work on, which for a
+commons is a slow way of not being one.
+"""
+
+weight = 100
+weight_source = "bdfl-seed"
+weight_note = """
+Seeded, not voted. Carries exactly the mandate one person's judgement carries
+until cycle 0001 runs at G3, at which point weight_source becomes
+"vote:cycle-0001" and this number will probably change.
+
+Set equal to 0001 deliberately rather than higher: 0001's success criteria are
+not all met, and an objective that outranks an unfinished predecessor invites
+exactly the drift the Guardian ruling was about.
+"""
+
+[objective.success]
+criteria = [
+    "A fault produces a legible report naming the exception class, the faulting address where one exists, and the instruction — instead of a silent loop",
+    "The kernel knows which physical memory exists and which of it is already spoken for, from the device tree rather than from constants",
+    "Frames can be allocated and freed without the allocator losing track, proven by a test that exhausts and recovers the pool",
+    "The MMU is on, with the kernel mapped and everything else unmapped by default — reaching an address nobody granted is a fault, not a read",
+    "A kernel heap exists, so later milestones can hold data structures whose size is not known at compile time",
+    "Every one of the above holds on the nano profile's budget, or the profile is amended by vote rather than by convenience",
+]
+
+[objective.non_goals]
+excluded = [
+    "User space, EL0, system calls — M3, and they need this first",
+    "Capabilities and IPC — M4. This objective builds the ground they stand on, and claiming any part of them here would be the retrofit the constitution warns about",
+    "Interrupts, timers, scheduling — M2",
+    "Swapping, demand paging, or any policy about what to do when memory runs out. Knowing memory exists comes before deciding how to ration it",
+    "Real hardware. QEMU virt remains sufficient and correct until M9",
+    "Performance. Correct and small first; a page table walk nobody has measured is not slow yet",
+]
+
+[objective.milestones]
+kernel = ["M1"]
+governance = []
+
+[objective.note_on_scope]
+text = """
+This objective is deliberately narrower than "memory management" as an operating
+systems textbook would use the term. No swapping, no demand paging, no policy
+about exhaustion. Those are decisions about how to ration a resource, and they
+should be made by a project that already knows what happens when the resource is
+simply absent.
+"""

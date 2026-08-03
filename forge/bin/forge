@@ -259,8 +259,11 @@ t_contribution_submit() {
         rfc_sha=$(sha256sum "$rfc_file" | cut -d' ' -f1)
     fi
 
+    # Hash the task content actually read above, not a path — the file may live
+    # in tasks/open/ or tasks/active/ depending on where the claim moved it, and
+    # what matters is which text the implementer worked against.
     local task_sha=""
-    [ -f "$src_task" ] && task_sha=$(sha256sum "$src_task" | cut -d' ' -f1)
+    task_sha=$(printf '%s' "$tf" | sha256sum | cut -d' ' -f1)
 
     cat > "$dir/contribution.toml" <<EOF
 [contribution]

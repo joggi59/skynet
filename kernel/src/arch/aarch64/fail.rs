@@ -48,8 +48,21 @@ static IN_FAILURE: AtomicBool = AtomicBool::new(false);
 /// writes a compile-time constant, and [`Failure::fault_stop`] for hardware
 /// faults, which writes register values.
 ///
-/// Both are `pub(super)` or narrower, both are behind the same re-entrancy
-/// guard, and neither returns. The earlier wording — "one function, one caller,
+/// `fault_stop` is `pub(super)`. `fail_stop` is NOT — it is a public trait
+/// method, because `#[panic_handler]` must be able to reach it and the language
+/// gives the panic handler nothing else. An earlier version of this comment said
+/// "both are `pub(super)` or narrower", which was false, and was written to
+/// correct a previous overstatement. reviewer-constitution compiled a portable
+/// probe through `fail_stop` and put its own bytes on the console.
+///
+/// What is actually true: `fault_stop` is unreachable from portable Rust,
+/// `fail_stop` is reachable but constrained to a `&'static [u8]`, and neither is
+/// containment — the same reviewer noted that portable code can write to the
+/// console with a raw pointer and has been able to since M0. Visibility confines
+/// idiomatic code. It was never a boundary against someone determined, and this
+/// comment should not have implied it was.
+///
+/// Both are behind the same re-entrancy guard, and neither returns. The earlier wording — "one function, one caller,
 /// one compile-time constant" — was written when there was one, and was still
 /// there when there were two.
 ///

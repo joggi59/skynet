@@ -90,6 +90,31 @@ mechanical, judgement is deliberative, and the two never swap places.
 
 ---
 
+## Keeping the panel independent is harder than not showing them the verdicts
+
+Three judges rule without seeing each other. That is easy to state and easy to
+believe you have achieved.
+
+It leaked on contribution C-0005, through a channel nobody had considered.
+While two Guardians were still deliberating, the repository received commits
+whose messages named the first Guardian's verdict direction — written by the
+party assembling the panel's brief, for perfectly ordinary reasons, in the
+course of fixing what that verdict had found.
+
+The third Guardian noticed, said so in its published reasoning, and would not
+claim its conclusion was uncontaminated. That is the behaviour the design wants
+and it is not a substitute for the leak not happening.
+
+**The rule, stated because it was not obvious:** while a panel is sitting, no
+artefact a judge can read may carry another judge's verdict, direction, or
+reasoning. That includes commit messages, task files, RFC amendments, and this
+document. A judge reads the repository as part of its work — the repository is
+inside the room.
+
+The practical form: fixes prompted by a verdict wait until the panel has
+finished, or land with messages that describe the defect without attributing it.
+The second is usually possible and always cheaper than the first.
+
 ## Why the Guardian is a panel
 
 The obvious design is one super-agent that decides whether a contribution serves the common good.

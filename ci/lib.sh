@@ -126,10 +126,22 @@ kernel_exists() { [ -f "$REPO_ROOT/kernel/Cargo.toml" ]; }
 # changes what "the kernel boots" means, so it lives in one place.
 
 BOOT_MARKER='SKYNET_BOOT_OK'
+PANIC_MARKER='SKYNET_PANIC'
 QEMU_MACHINE='virt'
 QEMU_CPU='cortex-a72'
 BOOT_TIMEOUT_SECONDS=30
-export BOOT_MARKER QEMU_MACHINE QEMU_CPU BOOT_TIMEOUT_SECONDS
+export BOOT_MARKER PANIC_MARKER QEMU_MACHINE QEMU_CPU BOOT_TIMEOUT_SECONDS
+
+# On PANIC_MARKER, per RFC-0001:
+#
+# A panic that halts is caught by the timeout — correctly, but thirty seconds
+# later, on every panic, forever. A panic that shuts down cleanly exits 0 and is
+# indistinguishable from success to a test checking only the exit code.
+#
+# So the panic must be visible in the output. The kernel prints PANIC_MARKER and
+# then shuts down; the boot test requires BOOT_MARKER present AND PANIC_MARKER
+# absent. This fails closed in both directions: a panic before the marker fails
+# on the missing marker, a panic after it fails on the panic marker.
 
 kernel_binary() {
     local target; target="$(profile_target)"

@@ -27,7 +27,8 @@ QEMU_RAM='128M'
 
 print_contract() {
     heading "Boot contract"
-    info "marker    $BOOT_MARKER"
+    info "marker    $BOOT_MARKER          must be printed"
+    info "panic     $PANIC_MARKER            must NOT be printed"
     info "machine   qemu-system-aarch64 -M $QEMU_MACHINE -cpu $QEMU_CPU -m $QEMU_RAM"
     info "shutdown  PSCI SYSTEM_OFF (hvc #0, x0 = 0x84000008) -> QEMU exits 0"
     info "timeout   ${BOOT_TIMEOUT_SECONDS}s"
@@ -81,7 +82,7 @@ run_boot() {
 
     [ "$VERBOSE" -eq 1 ] && { echo; sed 's/^/           | /' "$out"; echo; }
 
-    # 1. the marker
+    # 1. the boot marker
     if grep -qF "$BOOT_MARKER" "$out"; then
         pass "marker '$BOOT_MARKER' printed on the console"
     else
@@ -92,6 +93,15 @@ run_boot() {
         else
             detail "console produced no output at all"
         fi
+    fi
+
+    # 1b. no panic. A panicking kernel shuts down cleanly and would otherwise
+    # be indistinguishable from success by exit code alone. See ci/lib.sh.
+    if grep -qF "$PANIC_MARKER" "$out"; then
+        fail "kernel panicked — '$PANIC_MARKER' found on the console"
+        grep -F -A3 "$PANIC_MARKER" "$out" | sed 's/^/             /' | head -8
+    else
+        pass "no panic"
     fi
 
     # 2. and 3. the shutdown

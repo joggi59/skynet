@@ -58,11 +58,17 @@ pub trait Cpu {
 pub trait FailStop {
     /// Emit `bytes`, then stop the machine. Does not return.
     ///
+    /// `&'static [u8]`, not `&[u8]`. The bound on this operation is that it
+    /// writes a compile-time constant and nothing else — an arbitrary runtime
+    /// slice left that bound as prose, and review compiled a probe carrying
+    /// runtime state through it. The lifetime makes the bound a property of the
+    /// type rather than a promise in a comment.
+    ///
     /// # Safety
     /// Callable only from the panic handler. The implementation may alias a
     /// console owned elsewhere, which is sound only because the kernel has
     /// already failed and no other code will run again.
-    unsafe fn fail_stop(bytes: &[u8]) -> !;
+    unsafe fn fail_stop(bytes: &'static [u8]) -> !;
 }
 
 /// Everything the boot path found, on its way to `kernel_main`.

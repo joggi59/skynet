@@ -345,32 +345,18 @@ unsafe extern "C" fn _start() -> ! {
         "    b    0b",
         "1:  adrp x12, __stack_top",
         "    add  x12, x12, #:lo12:__stack_top",
+        // --- EL1 is the only supported entry level (see O-3, closed) ---
         "mrs  x9, CurrentEL",
         "lsr  x9, x9, #2",
-        "cmp  x9, #2",
-        "b.ne 2f",
-        // --- entered at EL2: drop to EL1h ---
-        "movz x9, #0x8000, lsl #16",       // HCR_EL2.RW = 1: EL1 is AArch64
-        "msr  hcr_el2, x9",
+        "cmp  x9, #1",
+        "b.ne 4f",
         "movz x9, #0x0800",                // SCTLR_EL1 = 0x30d0_0800
         "movk x9, #0x30d0, lsl #16",
         "msr  sctlr_el1, x9",
-        "mov  x9, #0x3c5",                 // SPSR_EL2: D,A,I,F masked, M = EL1h
-        "msr  spsr_el2, x9",
-        "adr  x9, 3f",
-        "msr  elr_el2, x9",
-        "msr  sp_el1, x12",
-        "eret",
-        // --- entered at EL1: configure in place ---
-        "2:  cmp  x9, #1",
-        "    b.ne 4f",
-        "    movz x9, #0x0800",
-        "    movk x9, #0x30d0, lsl #16",
-        "    msr  sctlr_el1, x9",
-        "    isb",
-        "3:  mov  sp, x12",
-        "    b    {rust}",
-        // --- anything else (EL3): unsupported ---
+        "isb",
+        "mov  sp, x12",
+        "b    {rust}",
+        // --- entered anywhere else (EL2, EL3): park ---
         "4:  wfi",
         "    b    4b",
         rust = sym boot_rust,
@@ -390,8 +376,9 @@ Details that are not obvious, and that a reviewer should check:
 - **The kernel requires the MMU and caches to be off at entry**, as the arm64 Linux boot protocol
   does. M0 does not attempt to turn a running MMU off; doing so while executing changes the
   translation of the program counter.
-- **x12 survives the `eret`.** `eret` does not alter general-purpose registers, so the EL2 path and
-  the EL1 path share the single `mov sp, x12` at label 3.
+- **`isb` after writing `SCTLR_EL1`.** The write is a context-changing operation; without the
+  barrier the processor is permitted to have already fetched instructions under the old
+  configuration. It costs one instruction and removes the question.
 - **`.bss` is zeroed in assembly, not in Rust.** The Rust alternative requires declaring
   `__bss_start` and `__bss_end` as `extern` statics: as `static` they are immutable and writing
   through them is not defensible, and as `static mut` they would be the only `static mut` in the
@@ -401,11 +388,14 @@ Details that are not obvious, and that a reviewer should check:
 - **EL3 is not supported.** It cannot occur under the boot contract's invocation, and an EL3 drop is
   speculative code in a privileged path. The unsupported case parks the processor in the same `wfi`
   loop the panic path uses.
-- **Dropping from EL2 is for robustness only, and does not make PSCI work at EL2.** QEMU sets the
-  conduit to SMC when `virtualization=on`, and `arm_load_kernel` disables an HVC conduit outright
-  whenever the boot EL is 2 or above. A kernel entered at EL2 on QEMU virt must therefore discover
-  its conduit rather than assume HVC. Under the contract M0 is only ever entered at EL1. Open
-  question O-3.
+- **Only EL1 is supported, and anything else parks.** An earlier revision dropped from EL2 to EL1
+  for robustness. `reviewer-safety` refused it as a blocking finding, correctly: QEMU sets the PSCI
+  conduit to SMC when `virtualization=on` and `arm_load_kernel` disables an HVC conduit outright
+  whenever the boot EL is 2 or above, so a kernel that drops from EL2 boots and then cannot shut
+  down — its `hvc` traps to an uninitialised `VBAR_EL2`. The drop made `PowerControl`'s safety
+  precondition false by the same patch that established it. Parking is smaller, has no unsound path,
+  and is honest about a contract that only ever enters at EL1. Real hardware that boots at EL2 is a
+  non-goal until M9, and wants conduit discovery rather than an assumption. O-3, closed.
 
 The Rust half of the boot path, in the same file:
 
@@ -682,8 +672,8 @@ stated so the implementer does not reach for a dependency under time pressure.
 1. QEMU loads the ELF at `0x4008_0000`, builds a device tree at `0x4000_0000`, resets the CPU (all
    general-purpose registers zero) and sets PC to `_start`. Entry is at EL1.
 2. `_start` masks D, A, I and F; zeroes `.bss`; loads `__stack_top`.
-3. It reads `CurrentEL`. At EL2 it sets `HCR_EL2.RW`, `SCTLR_EL1`, `SPSR_EL2`, `ELR_EL2` and `SP_EL1`
-   and `eret`s to EL1h. At EL1 it writes `SCTLR_EL1` and `isb`s. Anything else parks.
+3. It reads `CurrentEL`. At EL1 it writes `SCTLR_EL1` and `isb`s. At any other exception level it
+   parks in a `wfi` loop — EL1 is the only level M0 supports (O-3).
 4. It sets SP and branches to `boot_rust`.
 5. `boot_rust` mints `BootConsole` and `PowerControl`, packs them into `BootResources`, and calls
    `kernel_main`.
@@ -1091,14 +1081,14 @@ does not care. M1 will, the moment it wants a device tree. Resolving it means ch
 placement rule depends on where the image links), or correcting the contract. The architect cannot
 edit `ci/`.
 
-**O-3.** The EL2-to-EL1 drop is written for robustness on hardware, but it is untestable under the
-boot contract, which always enters at EL1 — and if it *were* exercised on QEMU virt with
-`virtualization=on`, PSCI would not work, because QEMU sets the conduit to SMC in that configuration
-and `arm_load_kernel` disables an HVC conduit whenever the boot EL is 2 or above. The EL2 path is
-therefore correct for entry and wrong for shutdown, and nothing in CI will notice. Is untested
-robustness code in a privileged path worth its bytes? The alternative is to reject any entry that is
-not EL1, which is smaller and more honest but fails on real hardware that boots at EL2. This RFC
-keeps the drop and flags it; a reviewer may reasonably disagree.
+**O-3 (closed).** An earlier revision dropped from EL2 to EL1 for robustness on hardware.
+`reviewer-safety` rejected contribution C-0001 over it with a blocking finding, and the finding was
+right: the drop falsifies the precondition `PowerControl::new()` documents, because QEMU switches the
+PSCI conduit to SMC under `virtualization=on` and disables an HVC conduit whenever the boot EL is 2
+or above — the resulting `hvc` traps to an uninitialised `VBAR_EL2`. The path was correct for entry
+and wrong for shutdown, and nothing in CI would have noticed. M0 now supports EL1 only and parks on
+anything else. Untested robustness code in a privileged path is not robustness. Real hardware
+entering at EL2 arrives with M9 and needs conduit discovery, which is a design, not a branch.
 
 **O-4.** The panic path says *that* the kernel failed and never *why*. `PanicInfo` is deliberately
 discarded, and the marker is identical whatever the cause. That is right for M0 — it keeps

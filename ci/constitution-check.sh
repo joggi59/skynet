@@ -71,9 +71,15 @@ check_hal_boundary() {
     while IFS= read -r construct; do
         [ -z "$construct" ] && continue
         # Search kernel sources outside the HAL directory only.
+        #
+        # The comment exclusion matches after the `path:lineno:` prefix that
+        # `grep -rnF` emits, not at the start of the line. Anchoring it with
+        # '^\s*//' matched nothing at all, so every comment mentioning a
+        # forbidden construct was reported as a violation (RFC-0001, O-6).
         local hits
         hits=$(grep -rnF -- "$construct" kernel/src 2>/dev/null \
-               | grep -v "^$hal_dir/" | grep -v '^\s*//' || true)
+               | grep -v "^$hal_dir/" \
+               | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(//|\*|/\*)' || true)
         if [ -n "$hits" ]; then
             fail "architecture-specific construct '$construct' outside $hal_dir"
             while IFS= read -r h; do detail "$h"; done <<< "$hits"

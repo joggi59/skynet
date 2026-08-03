@@ -126,11 +126,17 @@ check_kind = "script"
 check = "ci/constitution-check.sh --check hal-boundary"
 hal_dir = "kernel/src/arch"
 # Constructs that may appear only inside hal_dir.
+#
+# "#[unsafe(naked)]" rather than "#[naked]": the latter is not the stable
+# spelling, so it matched nothing. Coverage survived only because naked_asm! is
+# also listed — a check that passes for the wrong reason. Found by the architect
+# reviewing this file against a real implementation (RFC-0001, O-6).
 forbidden_outside_hal = [
     "core::arch::",
     "asm!",
     "naked_asm!",
     "global_asm!",
+    "#[unsafe(naked)]",
     "#[naked]",
     "target_arch",
 ]

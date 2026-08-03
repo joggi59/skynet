@@ -1,0 +1,39 @@
+# Repository-root cargo configuration.
+#
+# WHY THIS FILE EXISTS, AND WHY IT IS HERE RATHER THAN IN kernel/
+#
+# The bare-metal target's default linker is `rust-lld`, which Fedora's `rust`
+# package does not ship — /usr/lib/rustlib/*/bin/ does not exist, and
+# rust-std-static-aarch64-unknown-none-softfloat contains only lib/*.rlib. A
+# machine provisioned by following ci/lib.sh's INSTALL_HINT therefore passed the
+# toolchain reachability check and then failed to link.
+#
+# Nothing inside kernel/ can fix that:
+#
+#   - build scripts have no `rustc-linker` directive; cargo rejects it as an
+#     unknown key (verified)
+#   - kernel/.cargo/config.toml is NOT read, because cargo discovers
+#     .cargo/config.toml by walking up from the CURRENT DIRECTORY and ci/build.sh
+#     invokes cargo from the repository root with --manifest-path (verified
+#     empirically: a linker key placed there was honoured from inside kernel/ and
+#     silently ignored from the parent)
+#
+# This file IS read, because it sits at the directory cargo is invoked from.
+#
+# RFC-0001 recorded the gap as open question O-1 and listed the remedies, all of
+# which require authority the architect and implementer lack. Two Guardians
+# independently graded it a `major` provenance finding on contribution C-0002 —
+# the artefact that would become the ledger's first gate-passed line was linked
+# by a binary no committed file named — and both said it must be closed before
+# that line is written rather than after. This closes it, in the repository,
+# where provenance can see it.
+#
+# Only the linker binary is set. `linker-flavor` is deliberately absent: the
+# target's own flavor is already direct ld-style invocation, which is exactly
+# what ld.lld expects. Verified linking with this key alone.
+#
+# Anything affecting the produced artefact other than the linker binary belongs
+# in kernel/build.rs, which is read regardless of where cargo runs.
+
+[target.aarch64-unknown-none-softfloat]
+linker = "ld.lld"

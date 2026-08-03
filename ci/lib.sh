@@ -105,7 +105,11 @@ profile_target() { toml_get "$(profile_file)" "d['profile']['target']"; }
 # an unrun check, not a failing one, and conflating the two teaches people to
 # ignore red.
 
-INSTALL_HINT='sudo dnf install qemu-system-aarch64 rust-std-static-aarch64-unknown-none-softfloat dtc'
+# Named a linker only after two Guardians independently graded its absence a
+# provenance finding: the target's default is rust-lld, which Fedora does not
+# ship, so a machine provisioned by following this hint passed the reachability
+# check and then could not link. See .cargo/config.toml.
+INSTALL_HINT='sudo dnf install qemu-system-aarch64 rust-std-static-aarch64-unknown-none-softfloat lld clippy dtc'
 
 # Is the target's `core` actually reachable?
 #

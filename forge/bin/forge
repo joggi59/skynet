@@ -259,11 +259,20 @@ t_contribution_submit() {
         rfc_sha=$(sha256sum "$rfc_file" | cut -d' ' -f1)
     fi
 
-    # Hash the task content actually read above, not a path — the file may live
-    # in tasks/open/ or tasks/active/ depending on where the claim moved it, and
-    # what matters is which text the implementer worked against.
+    # Hash the task file BYTE FOR BYTE, so `sha256sum <file>` reproduces it.
+    #
+    # An earlier version hashed a shell variable holding the content. Command
+    # substitution strips trailing newlines, so the digest never matched what an
+    # auditor gets from sha256sum — provenance that needs archaeology to confirm
+    # is weaker than provenance that verifies on sight. Found by a Guardian
+    # reviewing C-0002, which chased the mismatch to ground before ruling.
+    #
+    # Piped, not substituted: no shell variable touches the bytes.
     local task_sha=""
-    task_sha=$(printf '%s' "$tf" | sha256sum | cut -d' ' -f1)
+    task_sha=$(git show "$branch:tasks/active/$task.toml" 2>/dev/null | sha256sum | cut -d' ' -f1)
+    if [ -z "$task_sha" ] || [ "$task_sha" = "$(printf '' | sha256sum | cut -d' ' -f1)" ]; then
+        task_sha=$(sha256sum "$REPO_ROOT/tasks/open/$task.toml" 2>/dev/null | cut -d' ' -f1)
+    fi
 
     cat > "$dir/contribution.toml" <<EOF
 [contribution]

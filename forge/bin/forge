@@ -144,7 +144,10 @@ for x in c: print(f'              - {x}')
 " 2>/dev/null || true
             done
         done
-        [ "$found" -eq 0 ] && info "no tasks in state '$state'"
+        # Not `[ ... ] && info ...`: as the last statement that would make the
+        # function return the condition's status, so a successful listing would
+        # exit 1.
+        if [ "$found" -eq 0 ]; then info "no tasks in state '$state'"; fi
     fi
 }
 

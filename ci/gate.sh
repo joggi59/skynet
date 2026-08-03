@@ -180,8 +180,18 @@ cond_guardian() {
         esac
     done
 
-    if [ "$found" -eq 0 ]; then
-        fail "no Guardian verdicts — the panel has not ruled"
+    # The WHOLE panel must have ruled, not merely enough of it to reach quorum.
+    #
+    # The constitution grants a Guardian the power to reject alone. That power is
+    # worthless if the gate proceeds before every member has spoken: a judge
+    # still deliberating cannot exercise a veto over a merge that already
+    # happened. This condition counted the verdicts that existed, so C-0003
+    # merged on two of three while the third was still reading.
+    #
+    # approve_quorum is how many must APPROVE, not how many need to answer.
+    if [ "$found" -lt "$panel" ]; then
+        fail "only $found of $panel Guardian verdicts — the panel has not finished"
+        detail "a Guardian may reject alone; that power requires waiting for it"
         return
     fi
     if [ "$reject" -gt 0 ]; then

@@ -2,7 +2,12 @@
 id = "T-0004"
 title = "Install exception vectors and report faults legibly"
 rfc = "0002"
-objective = "0001"
+objective = "0002"      # was 0001. guardian-1 rejected C-0005 over it: this work
+                        # satisfies objective 0002's first success criterion
+                        # verbatim and none of 0001's six. The objective did not
+                        # exist when this task was cut; it does now, and this is
+                        # the first contribution in the project with two to
+                        # choose between.
 state = "open"
 estimated_difficulty = "medium"
 profile = "standard"

@@ -89,13 +89,31 @@ impl hal::FailStop for Failure {
         // expires in the safe direction — `swap` becomes correct once the MMU is
         // on and this memory is Normal, which is the same milestone that brings
         // the second core.
-        if IN_FAILURE.load(Ordering::Relaxed) {
+        // Read, then set, BEFORE anything that can fault.
+        //
+        // The window between the two is the whole guard. An earlier revision put
+        // the store after the load but let the compiler place stack traffic
+        // between them; reviewer-safety injected a fault into that gap and
+        // counted 2,733,246 exceptions. The guard was correct and the window was
+        // the bug.
+        //
+        // The observer that matters here is not another core — it is THIS core
+        // taking a synchronous exception, which DAIF does not mask. That is why
+        // the earlier justification ("single-core, no interrupts") was the wrong
+        // argument for the right code: it reasoned about concurrency for a
+        // re-entrancy guard.
+        //
+        // Load and store, not `swap`: `swap` needs an exclusive monitor, and
+        // with the MMU off this is Device-nGnRnE memory where the architecture
+        // does not guarantee one.
+        let already = IN_FAILURE.load(Ordering::Relaxed);
+        IN_FAILURE.store(true, Ordering::Relaxed);
+        if already {
             // Already failing. Do not touch the console: the previous entry may
             // have been interrupted mid-write, and whatever panicked will panic
             // again if asked to do the same work. Stop here.
             Processor::halt()
         }
-        IN_FAILURE.store(true, Ordering::Relaxed);
 
         // SAFETY: the kernel has already failed and this function never returns,
         // so no other owner of the PL011 or of PSCI will run again and the
@@ -147,12 +165,17 @@ impl Failure {
     /// cycle before this one. It was applied to the constructors and not to
     /// this function.
     pub(super) unsafe fn fault_stop(slot: Option<Slot>, esr: u64, far: u64, elr: u64) -> ! {
-        if IN_FAILURE.load(Ordering::Relaxed) {
+        // Read, then set, BEFORE anything that can fault — see `fail_stop` for
+        // why the window between them is the entire guard, and why the observer
+        // that matters is this core taking a synchronous exception rather than a
+        // second core.
+        let already = IN_FAILURE.load(Ordering::Relaxed);
+        IN_FAILURE.store(true, Ordering::Relaxed);
+        if already {
             // Already failing. A fault inside the failure path lands here and
             // stops, instead of vectoring again into the same code.
             Processor::halt()
         }
-        IN_FAILURE.store(true, Ordering::Relaxed);
 
         // SAFETY: as for `fail_stop` — the kernel has failed, this never
         // returns, and the guard above makes the "at most once" clause true of

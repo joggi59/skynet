@@ -39,6 +39,21 @@ SECTIONS
      * The result linked cleanly, produced no `.vectors` section at all, and was
      * aligned only by an assembler directive inside the function. */
     .vectors ALIGN(2048) : { KEEP(*(.vectors)) }
+
+    /* A link error, not a check that can be skipped.
+     *
+     * ci/constitution-check.sh measures this too, but a CI check has to find the
+     * section before it can measure it: rename the input section and the check
+     * reports SKIP with exit 0 while the table sits where the hardware reads it
+     * as the middle of _start. reviewer-safety demonstrated exactly that,
+     * including that build, clippy and the boot test all still pass.
+     *
+     * ASSERT cannot fail open. If .vectors is absent its address is 0, which is
+     * 2 KiB aligned — so the size is asserted too. */
+    ASSERT((ADDR(.vectors) & 2047) == 0,
+           "vector table is not 2 KiB aligned: VBAR_EL1's low 11 bits are RES0")
+    ASSERT(SIZEOF(.vectors) >= 0x700,
+           "vector table is missing or truncated: expected 16 entries of 128 bytes")
     .rodata : ALIGN(8) { *(.rodata .rodata.*) }
     .got    : ALIGN(8) { *(.got) *(.got.plt) }
     .data   : ALIGN(8) { *(.data .data.*) }

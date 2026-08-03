@@ -748,18 +748,13 @@ This RFC is largely about this invariant. Architecture-specific material is conf
 and its addresses. Portable code (`main.rs`, `hal.rs`, `panic.rs`) contains none of the six forbidden
 constructs and no address literal.
 
-The mechanical check has a property implementers must know about. It filters hits with
-`grep -v '^\s*//'` applied to `grep -rnF` output, and that output begins with the file path, so the
-comment filter never matches. **A comment mentioning `asm!`, `naked_asm!`, `global_asm!`,
-`core::arch::`, `#[naked]` or `target_arch` outside `kernel/src/arch/` will fail gate condition 6.**
-Portable files must therefore describe these concepts in prose without naming them. That is a defect
-in `ci/constitution-check.sh`, not in the invariant; the architect cannot edit `ci/` and records it
-here and in O-6.
-
-A second observation, offered as an note rather than a request: `forbidden_outside_hal` lists
-`#[naked]`, the pre-1.88 spelling. The stable spelling is `#[unsafe(naked)]` and does not contain that
-substring. Coverage survives only because a naked function must also contain `naked_asm!`, which is
-listed.
+Reading the mechanical check against this design turned up two defects in it, both since fixed and
+both recorded in O-6: the comment exclusion was dead code, so any comment merely *mentioning* a
+forbidden construct outside the HAL was reported as a violation, and the list matched `#[naked]`
+rather than the stable `#[unsafe(naked)]`, so that entry matched nothing at all. This RFC is written
+against the fixed check. Implementers should still prefer describing these constructs in prose over
+naming them in portable comments — the exclusion now works, but a portable file with no reason to
+mention `asm!` is a portable file that is easier to trust.
 
 Beyond the letter, the spirit: no trait method takes a parameter that only makes sense on aarch64.
 `Console::write` takes bytes, `Power::off` takes nothing, `Cpu::halt` takes nothing. No portable
@@ -949,8 +944,9 @@ All identifiers, comments and documents in English.
 - C14. `readelf -S` on the built ELF shows no PROGBITS section at or above `__bss_start`, and the
   `objcopy -O binary` output is within a few kilobytes of `.text + .rodata + .data` — proving
   `--nmagic` took effect and no padding was emitted.
-- C15. `grep -rnE 'asm!|naked_asm!|global_asm!|core::arch::|#\[naked\]|target_arch' kernel/src |
-  grep -v '^kernel/src/arch/'` is empty, **including comments** (see the invariant 6 section).
+- C15. `grep -rnE 'asm!|naked_asm!|global_asm!|core::arch::|#\[unsafe\(naked\)\]|target_arch'
+  kernel/src | grep -v '^kernel/src/arch/'` is empty. Comments are excluded by the gate's own check
+  and need not be by this one; a hit in a comment is a prompt to reword it, not a violation.
 - C16. `nm` on the built ELF places `_start` at `0x40080000`.
 - C17. Building for an unsupported `--target` fails with the `compile_error!` from
   `kernel/src/arch/mod.rs` or the `panic!` from `build.rs`, not with a linker error.
@@ -1058,25 +1054,35 @@ up to 4 KiB in the privileged image. Named as M1's first item so the decision is
 
 ## Open questions
 
-**O-1 (blocking, environment).** The reference machine cannot link this kernel. The target's default
-linker is `rust-lld`, and Fedora's `rust` package ships no such binary (`/usr/lib/rustlib/*/bin/` does
-not exist; `rust-std-static-aarch64-unknown-none-softfloat` contains only `lib/*.rlib`). No mechanism
-inside `kernel/` can fix it: build scripts have no `rustc-linker` directive — verified, cargo rejects
-it as an unknown key — and `kernel/.cargo/config.toml` is not read by `ci/build.sh`. Three options,
-none of which the architect or the implementer has the authority to enact:
+**O-1 (blocking, environment).** The reference machine cannot link this kernel as configured. The
+target's default linker is `rust-lld`, and Fedora's `rust` package ships no such binary:
+`/usr/lib/rustlib/*/bin/` does not exist, and `rust-std-static-aarch64-unknown-none-softfloat`
+contains only `lib/*.rlib`. Nothing inside `kernel/` can fix it — build scripts have no
+`rustc-linker` directive (verified: cargo rejects it as an unknown key), and
+`kernel/.cargo/config.toml` is not read by `ci/build.sh`. Selecting the *linker binary* is the one
+piece of build configuration this design cannot own.
 
-1. Export `CARGO_TARGET_AARCH64_UNKNOWN_NONE_SOFTFLOAT_LINKER` in the environment CI runs in. GNU
+Four options, none of which the architect or the implementer has the authority to enact:
+
+1. Use a rustup toolchain, whose `rust-std` component ships `rust-lld` under
+   `lib/rustlib/<host>/bin/`, and point CI at it. `ci/lib.sh` now detects the target by reachability
+   and honours a `--sysroot` in `RUSTFLAGS`, so a rustup sysroot is a first-class supported
+   configuration rather than a workaround. This is probably the intended answer, and it makes the
+   toolchain a recorded property of the build environment rather than a distribution accident.
+2. Export `CARGO_TARGET_AARCH64_UNKNOWN_NONE_SOFTFLOAT_LINKER` in the environment CI runs in. GNU
    `ld` from binutils is aarch64-capable on this aarch64 host; `ld.lld` from the `lld` package also
    works. Smallest change, but it lives outside the repository, which sits badly with provenance.
-2. A repository-root `.cargo/config.toml` with a `[target.…] linker` key. Cargo *does* read this one,
+3. A repository-root `.cargo/config.toml` with a `[target.…] linker` key. Cargo *does* read this one,
    because `ci/build.sh` runs from the repository root. Requires the BDFL: no agent role may write
    there.
-3. One line in `ci/build.sh` to run cargo from inside `kernel/`, which would make
+4. One line in `ci/build.sh` to run cargo from inside `kernel/`, which would make
    `kernel/.cargo/config.toml` authoritative for CI and developers alike and would also make
    `build.rs` unnecessary. The cleanest durable fix, and a change to `ci/`.
 
-Related: `ci/lib.sh`'s `INSTALL_HINT` names no linker, so a fresh machine that follows it gets a
-PENDING toolchain check followed by a failing build.
+Whichever is chosen, it should be recorded somewhere a later reader can find, because "which linker
+produced this image" is a provenance question and the answer is currently ambient. Related:
+`ci/lib.sh`'s `INSTALL_HINT` names no linker, so a fresh machine that follows it gets a toolchain
+that passes the PENDING check and then fails to link.
 
 **O-2.** `ci/boot-test.sh --contract` states `x0 = device tree blob pointer`. Verified against QEMU's
 `hw/arm/boot.c`, that holds for a raw `Image` and not for the ELF the contract itself specifies. M0
@@ -1118,12 +1124,22 @@ handler — should be settled *before* the first unit test is written, because r
 restructuring the crate. Out of scope for M0, named here so it is not discovered by whoever writes
 test number one.
 
-**O-6.** Two defects in the mechanical checks, recorded because the architect cannot fix them.
-`ci/constitution-check.sh` applies `grep -v '^\s*//'` to `grep -rnF` output whose lines begin with a
-file path, so the comment exclusion never matches and any comment mentioning a forbidden construct
-outside `kernel/src/arch/` fails gate condition 6. And `forbidden_outside_hal` lists `#[naked]`,
-which is not the stable spelling (`#[unsafe(naked)]`); coverage survives only because `naked_asm!` is
-also listed.
+**O-6 (resolved during drafting; kept for the record).** Reading `ci/constitution-check.sh` against
+this design turned up two defects in the HAL boundary check, one of which meant a mechanically
+enforced invariant was partly enforcing nothing.
+
+1. The comment exclusion was dead code. `grep -rnF` prefixes every result with `path:lineno:`, so
+   anchoring the filter at `^\s*//` could never match, and any comment merely *mentioning* a
+   forbidden construct outside `kernel/src/arch/` was reported as a violation.
+2. `forbidden_outside_hal` listed `#[naked]`, which is not the stable spelling. The stable form is
+   `#[unsafe(naked)]` and does not contain that substring, so that entry matched nothing. Coverage
+   survived only because `naked_asm!` is also listed — a check passing for the wrong reason.
+
+Both were fixed in `ci/constitution-check.sh` and `constitution.toml` before this RFC was finalised,
+and this RFC is written against the fixed behaviour: comments outside the HAL are correctly excluded,
+and both naked-function spellings are matched. The entry is left here rather than deleted because the
+finding is part of how this design was produced, and because it is worth knowing that the check was
+weaker than it looked when M0 was being designed against it.
 
 **O-7.** The PL011 write path spins on `FR.TXFF` with no bound. Under QEMU the flag is effectively
 never set, so this is theoretical today, but an unbounded wait on a device flag in a boot path is

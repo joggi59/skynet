@@ -242,11 +242,33 @@ t_contribution_submit() {
     local dir="$FORGE_DIR/$id"
     mkdir -p "$dir/verdicts" "$dir/evidence"
 
+    # Pin the specification by CONTENT, not by number.
+    #
+    # C-0001 was judged against an RFC that was rewritten six minutes after the
+    # contribution was committed. Two independent agents found the drift; the
+    # conformance reviewer abstained because no patch could satisfy both
+    # versions, and the record could not say which one governed.
+    #
+    # `rfc = "0001"` names a file. A file is not a specification — its contents
+    # are. Recording the digest makes drift detectable instead of invisible, and
+    # the gate reports it rather than silently judging against whatever the file
+    # says at merge time.
+    local rfc_file rfc_sha=""
+    rfc_file=$(ls "$REPO_ROOT/rfcs/${rfc}-"*.md 2>/dev/null | head -1)
+    if [ -n "$rfc_file" ]; then
+        rfc_sha=$(sha256sum "$rfc_file" | cut -d' ' -f1)
+    fi
+
+    local task_sha=""
+    [ -f "$src_task" ] && task_sha=$(sha256sum "$src_task" | cut -d' ' -f1)
+
     cat > "$dir/contribution.toml" <<EOF
 [contribution]
 id          = "$id"
 task        = "$task"
 rfc         = "$rfc"
+rfc_sha256  = "$rfc_sha"
+task_sha256 = "$task_sha"
 objective   = "$objective"
 agent       = "$agent"
 model       = "$model"

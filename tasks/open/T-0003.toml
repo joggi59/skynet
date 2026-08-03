@@ -1,0 +1,106 @@
+[task]
+id = "T-0003"
+title = "Close the authority reach-around, and stop the failure path re-entering itself"
+rfc = "0001"
+objective = "0001"
+state = "open"
+estimated_difficulty = "small"
+profile = "standard"
+derived_from = "review findings on C-0002"
+
+statement = """
+Three fixes, all specified in RFC-0001 as amended, all derived from findings on
+the merged M0 contribution. None was caught by any machine check; all three were
+found by someone reading a claim and then writing the code that claim said was
+impossible.
+
+  1. VISIBILITY. `BootConsole::new` and `PowerControl::new` are `pub` and
+     re-exported at crate scope. `PowerControl::new()` takes no arguments, so any
+     portable module can write
+
+         unsafe { crate::arch::PowerControl::new() }.off()
+
+     and mint the authority to power the machine off, bypassing the token it was
+     handed — and it passes the HAL boundary check. Make both `pub(super)`.
+
+  2. THE FAILURE PATH'S TYPE. `fail_stop` takes `&[u8]`. Its documented bound is
+     that it writes a compile-time constant; an arbitrary runtime slice leaves
+     that bound as prose. Make it `&'static [u8]`.
+
+  3. RE-ENTRANCY. `fail_stop` can call itself without limit. One overflow in the
+     write path recurses through the panic handler until the 64 KiB stack runs
+     into `.text` 192 bytes below it, then vectors through an uninitialised
+     VBAR_EL1. Reproduced: 55.9 million exception entries in 20 seconds, no
+     console output, CI sees only a timeout. Add the guard the RFC specifies.
+
+Fix 1 is the important one. The project's claim that ownership does at M0 what a
+capability will do at M4 was weaker than stated for the whole of M0, and nothing
+mechanical could tell.
+"""
+
+[task.acceptance]
+criteria = [
+    "ci/build.sh exits 0",
+    "ci/build.sh --lint reports zero clippy warnings",
+    "ci/boot-test.sh finds SKYNET_BOOT_OK, does not find SKYNET_PANIC, and QEMU exits 0",
+    "SKYNET_PROFILE=nano ci/build.sh --size is within the 192 KiB budget",
+    "ci/constitution-check.sh --check hal-boundary passes",
+    "ci/constitution-check.sh --check no-kernel-deps passes",
+    "PROOF: adding `unsafe { crate::arch::PowerControl::new() }.off()` to kernel_main FAILS to compile with E0624. Demonstrate it, then remove it — a claim of this kind is worth nothing unless the counter-example was actually run",
+    "PROOF: passing a non-static slice to fail_stop fails to compile",
+    "PROOF: the re-entrancy guard is reached. Inject a panic inside fail_stop's own write, show the kernel halts instead of recursing, then remove the injection",
+    "the kernel contains exactly one `static`, in the failure path, and it is documented as the single exception with the argument for why it earns its place",
+    "REVIEW: every unsafe block still carries a // SAFETY: comment stating an invariant actually upheld on every path",
+    "REVIEW: the psci.rs SMCCC comment no longer contradicts itself — the earlier version justified the clobber list by divergence four lines above a fall-through that exists because the call may return",
+]
+
+[task.scope]
+touches = [
+    "kernel/src/hal.rs",
+    "kernel/src/arch/aarch64/fail.rs",
+    "kernel/src/arch/aarch64/pl011.rs",
+    "kernel/src/arch/aarch64/psci.rs",
+]
+does_not_touch = [
+    "ci/                — the implementer may not edit the checks that judge it",
+    "rfcs/              — the design is settled; if it is wrong, release the task",
+    "roadmap/, governance/, CONSTITUTION.md, constitution.toml",
+    ".provenance/       — the ledger is written by the gate",
+    "kernel/src/main.rs, panic.rs, boot.rs, arch/mod.rs — should need no change; if one does, say why in the submission rather than changing it quietly",
+]
+
+[task.constitutional]
+at_risk = [
+    "1 — no ambient authority (pending, M4): this task IS the invariant-1 work. Fix 1 converts a review checklist item into a language property",
+    "5 — zero telemetry (pending, M6): fix 2 makes 'writes only a constant' a type property rather than a comment",
+    "4 — frugality: the guard costs one byte of .bss and the visibility change costs nothing. If the image grows measurably, something else changed",
+]
+
+[task.notes]
+hints = """
+The guard needs state, and the kernel currently has none. That is the point of
+tension in this task and the RFC argues it at length: zero statics was evidence
+about the design, verified and valued by three judges and two reviewers; an
+unbounded recursion that overwrites the kernel's own text is a live defect with a
+reproduction. One AtomicBool whose only reachable effect is 'halt instead of
+recurse' grants no authority, carries no information, and cannot be reached
+outside the panic path.
+
+If you think the RFC is wrong about that — if you can show the path is provably
+panic-free for every future edit rather than for today's code — release the task
+and say so. That is a more useful contribution than implementing something you
+believe is mistaken, and it costs you nothing.
+
+On the visibility fix: `pub(super)` from inside `arch/aarch64/*` makes the
+constructors visible to `arch::aarch64` and no further. Verified on the merged
+implementation: the kernel builds byte-identical, and the reach-around becomes
+E0624. Do not reach for a sealed trait or a private module wrapper; the simple
+thing works.
+
+On the guard: a second entry must NOT touch the console. The first entry may have
+been interrupted mid-write, and whatever panicked will panic again if asked to do
+the same work. Go straight to halt.
+
+Everything else about the M0 design is settled and merged. This task changes four
+files and should change nothing observable about a successful boot.
+"""

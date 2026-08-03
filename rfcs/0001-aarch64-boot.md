@@ -161,11 +161,17 @@ pub trait Cpu {
 pub trait FailStop {
     /// Emit `bytes`, then stop the machine. Does not return.
     ///
+    /// `&'static [u8]`, not `&[u8]`: the RFC's bound on this operation is that
+    /// it writes a compile-time constant and nothing else. Taking an arbitrary
+    /// runtime slice left that bound as prose — review showed an exfiltration
+    /// probe carrying runtime state through it compiles. The lifetime makes the
+    /// bound a property of the type.
+    ///
     /// # Safety
     /// Callable only from the panic handler. The implementation may alias a
     /// console owned elsewhere, which is sound only because the kernel has
     /// already failed and no other code will run again.
-    unsafe fn fail_stop(bytes: &[u8]) -> !;
+    unsafe fn fail_stop(bytes: &'static [u8]) -> !;
 }
 
 /// Everything the boot path found, on its way to `kernel_main`.
@@ -220,8 +226,25 @@ of who currently calls what. Fifteen lines, zero bytes, and the difference betwe
 habit.
 
 **Why `kernel_main` is generic.** `kernel_main<C: Console, P: Power>(res: BootResources<C, P>)`
-cannot name `BootConsole`, so it cannot acquire one by any route other than the one it was handed.
-Portable code reaching for an aarch64 type would not type-check. Monomorphisation makes this free.
+cannot name `BootConsole` *in its own signature*, so it cannot be handed one by mistake, and
+monomorphisation makes the abstraction free.
+
+**Correction, after review.** An earlier revision claimed more than that: "portable code reaching for
+an aarch64 type would not type-check". `reviewer-constitution` demonstrated that this is false, and
+the demonstration reproduces — `arch/mod.rs` re-exports `BootConsole` and `PowerControl` at crate
+scope with `pub const unsafe fn new`, and `PowerControl::new()` is nullary, so
+
+```rust
+unsafe { crate::arch::PowerControl::new() }.off()
+```
+
+compiles from any portable module and passes the HAL boundary check. Genericity constrains what
+`kernel_main` can be *given*; it never constrained what any module can *construct*.
+
+The fix is `pub(super)` on both constructors, which reduces the reach-around to `E0624: associated
+function is private` while leaving the kernel byte-identical. Specified in §4 and required by T-0003.
+Recorded here rather than quietly amended: the claim was load-bearing in the argument that ownership
+does at M0 what a capability will do at M4, and it was weaker than stated for the whole of M0.
 
 ### 3. The portable kernel
 
@@ -435,7 +458,13 @@ impl BootConsole {
     /// # Safety
     /// `base` must be the MMIO base of a PL011 that no other code touches, and
     /// this must be called at most once for that device.
-    pub const unsafe fn new(base: usize) -> Self { /* ... */ }
+    ///
+    /// `pub(super)`, not `pub`: a crate-visible constructor lets any portable
+    /// module mint its own device and bypass the token it was handed, which
+    /// review demonstrated on the M0 implementation. Visibility is what makes
+    /// "only the boot path creates devices" a property of the language rather
+    /// than of a review checklist.
+    pub(super) const unsafe fn new(base: usize) -> Self { /* ... */ }
 }
 
 impl hal::Console for BootConsole { fn write(&mut self, bytes: &[u8]) { /* ... */ } }
@@ -462,8 +491,14 @@ pub struct PowerControl { _private: () }
 impl PowerControl {
     /// # Safety
     /// The platform's PSCI conduit must be HVC and callable from the current
-    /// exception level. True for QEMU virt entered at EL1; see RFC-0001 O-3.
-    pub const unsafe fn new() -> Self { Self { _private: () } }
+    /// exception level. True for QEMU virt entered at EL1, which is the only
+    /// entry level supported; `boot.rs` parks anywhere else.
+    ///
+    /// `pub(super)` for the reason given on `BootConsole::new`, and more
+    /// sharply here: this constructor takes no arguments, so a crate-visible
+    /// version hands the authority to power the machine off to anyone willing
+    /// to write `unsafe`.
+    pub(super) const unsafe fn new() -> Self { Self { _private: () } }
 }
 
 impl hal::Power for PowerControl {
@@ -471,6 +506,14 @@ impl hal::Power for PowerControl {
         // SAFETY: SMC32 SYSTEM_OFF takes its function ID in x0. QEMU virt
         // implements PSCI at the HVC conduit when the guest runs at EL1 with
         // no EL2 and no secure firmware, which is the contract's configuration.
+        //
+        // Clobbers: SMCCC v1.0 permits x4-x17 corruption and this kernel never
+        // queries SMCCC_VERSION, so it must assume v1.0. Declaring only x0-x3
+        // is sound here for a reason that must be stated rather than assumed:
+        // nothing is live across this call on either path. Not "because the
+        // call is divergent" — the fall-through below exists precisely because
+        // it may return. Review flagged the earlier wording as contradicting
+        // itself four lines later, and it did.
         unsafe { asm!("hvc #0", in("x0") 0x8400_0008u64, options(nomem, nostack)) };
         // Unreachable if PSCI honoured the call. Reached only if it did not, in
         // which case halting is correct and `options(noreturn)` would have been
@@ -479,6 +522,47 @@ impl hal::Power for PowerControl {
     }
 }
 ```
+
+**The failure path must not be able to re-enter itself.**
+
+`reviewer-safety` did not argue this; it reproduced it. Inject one overflowing addition into the
+console write path, and with `overflow-checks = true` the panic handler calls `fail_stop`, which
+mints a console, whose write overflows, which panics, which calls `fail_stop` again. The 64 KiB
+stack has no guard page and the MMU is off, so it runs into `.text` 192 bytes below and executes an
+undefined instruction, which vectors through an uninitialised `VBAR_EL1` — 55.9 million exception
+entries in twenty seconds, no console output at all, and CI sees nothing but a timeout.
+
+The path is genuinely panic-free today. "Panic-free today" is exactly the class of assumption this
+project refuses everywhere else.
+
+```rust
+static IN_FAILURE: AtomicBool = AtomicBool::new(false);
+
+unsafe fn fail_stop(bytes: &'static [u8]) -> ! {
+    if IN_FAILURE.swap(true, Ordering::Relaxed) {
+        // Already failing. Do not touch the console again — the previous entry
+        // may have been interrupted mid-write, and whatever panicked will panic
+        // again if we ask it to.
+        Processor::halt()
+    }
+    // ... mint, write, power off ...
+}
+```
+
+**What this costs, stated plainly.** It is the kernel's only `static`, and zero statics was a
+property three judges and two reviewers verified and valued — the evidence that ownership is doing
+at M0 what a capability will do at M4. This spends it.
+
+It is worth spending, and the reason is that the two things are not comparable. Zero statics is
+evidence *about* a design; a failure path that destroys the kernel's own text under a second fault
+is a live defect with a reproduction. A guard whose only reachable effect is "stop instead of
+recurse" grants no authority to anything: it is not a capability, cannot be read for information,
+and cannot be reached outside the panic path.
+
+The claim in §2 therefore narrows honestly, from "the kernel has no statics" to "the kernel has one
+static, in the failure path, and here is why it earns its place". A reviewer may reasonably prefer
+proving the path panic-free instead. That argument needs to show the property holds for every future
+edit, not for today's code, which is the harder claim.
 
 **`arch/aarch64/cpu.rs`:**
 

@@ -690,7 +690,14 @@ stated so the implementer does not reach for a dependency under time pressure.
 6. `kernel_main` writes `SKYNET_BOOT_OK\n` to the console and consumes `power` with `off()`.
 7. `off()` issues `hvc #0` with x0 = `0x8400_0008`. QEMU calls
    `qemu_system_shutdown_request(SHUTDOWN_CAUSE_GUEST_SHUTDOWN)` and exits 0.
-8. `ci/boot-test.sh` greps the log for the marker and checks the exit code. Both pass.
+8. `ci/boot-test.sh` finds `SKYNET_BOOT_OK`, does not find `SKYNET_PANIC`, and sees exit code 0. All
+   three pass.
+
+The failure sequence, which is the same design read backwards: any panic at any point in steps 4
+through 7 enters `#[panic_handler]`, which calls `Failure::fail_stop(PANIC_MARKER)`. That mints a
+console, writes `SKYNET_PANIC\n`, and issues the same `SYSTEM_OFF`. QEMU exits 0, and
+`ci/boot-test.sh` fails on the panic marker — whether or not the boot marker was already printed. A
+fault before step 4, or one that escapes the panic handler, produces the timeout instead.
 
 ## Non-goals
 
@@ -702,10 +709,12 @@ of opinion:
   threaded to `kernel_main`: it is zero, and preserving a register that does not contain what the
   contract claims would be preserving a fiction. See O-2.
 - **An exception vector table.** `VBAR_EL1` is not set. Interrupts are masked at entry, so only a
-  synchronous exception can occur, and at M0 that means a kernel bug. The CI outcome is identical
-  either way — an exception loop and a halt both produce a 30-second timeout and a FAIL — so a 2 KiB
-  table plus up to 2 KiB of alignment padding buys only debugger convenience today. It is the first
-  thing M1 should add, in `arch/aarch64/vectors.rs`.
+  synchronous exception can occur, and at M0 that means a kernel bug. It is the first thing M1 should
+  add, in `arch/aarch64/vectors.rs`, and the argument for it gets stronger the moment M0 lands: with
+  the panic path now failing fast and legibly, an unhandled exception becomes the *only* failure that
+  still costs a 30-second timeout and leaves an empty log. That is a reason to add vectors next, not
+  a reason to add them here — a table plus its 2 KiB alignment is up to 4 KiB of privileged image
+  bought for debugger convenience at a milestone whose whole job is the boot path.
 - **Secondary-core parking.** No `MPIDR_EL1` check. QEMU starts every non-primary CPU
   `start-powered-off` whenever the PSCI conduit is enabled, which it is here, so a park loop would be
   unreachable code in the privileged image. SMP is M2's problem and belongs with the code that will
@@ -1043,9 +1052,9 @@ and should be considered on its merits at M1, not worked around now.
 
 **An exception vector table at M0** — argued for on the grounds that a kernel for cars should never
 run with `VBAR_EL1` unset. What decided it: with interrupts masked, the only reachable exception is a
-synchronous fault caused by a kernel bug, and the observable CI outcome is a 30-second timeout either
-way. It buys debugger convenience, not safety, and costs up to 4 KiB in the privileged image. Named
-as M1's first item so the decision is deferred, not lost.
+synchronous fault caused by a kernel bug, and a halting handler and an exception loop are equally
+invisible to CI — both are a 30-second timeout. It buys debugger convenience, not safety, and costs
+up to 4 KiB in the privileged image. Named as M1's first item so the decision is deferred, not lost.
 
 ## Open questions
 

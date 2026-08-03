@@ -27,9 +27,12 @@ require_toolchain() {
         fail "cargo not found"
         return 1
     fi
-    if [ ! -d "/usr/lib/rustlib/$TARGET" ]; then
-        pending "bare-metal Rust target '$TARGET' is not installed"
+    # Delegated to lib.sh rather than re-tested here: duplicating the check meant
+    # fixing it in one place and leaving it wrong in the other.
+    if ! have_rust_target "$TARGET"; then
+        pending "bare-metal Rust target '$TARGET' is not reachable"
         detail "$INSTALL_HINT"
+        detail "or supply a sysroot containing it via RUSTFLAGS --sysroot"
         return 1
     fi
     return 0

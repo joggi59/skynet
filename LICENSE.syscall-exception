@@ -1,0 +1,64 @@
+SKYNET SYSCALL EXCEPTION
+========================
+
+This exception supplements the GNU General Public License, version 3, as
+published by the Free Software Foundation (see the LICENSE file).
+
+PURPOSE
+-------
+
+The kernel of this system is licensed under GPL-3.0-or-later. Without this
+exception, a strict reading could suggest that any user-space program invoking
+a kernel service becomes a derivative work of the kernel and must therefore be
+distributed under the same terms.
+
+That is not the intent. The intent is that the kernel — the part that enforces
+capabilities, budgets, the append-only ledger and the human veto — remains free
+and cannot be enclosed, while ordinary programs running on top of it may carry
+whatever license their authors choose.
+
+This mirrors the long-standing practice around the Linux kernel.
+
+GRANT
+-----
+
+Invoking the system call interface of this kernel from a program running in
+user space does not, by itself, cause that program to be covered by the GNU
+General Public License. Such a program is not considered a derivative work of
+the kernel solely by reason of that invocation.
+
+This exception applies to the documented system call interface and to the
+user-space header and interface definition files distributed for the purpose of
+using it.
+
+WHAT THIS EXCEPTION DOES NOT DO
+-------------------------------
+
+This exception does NOT apply to:
+
+  (a) modified versions of the kernel itself, in whole or in part;
+
+  (b) code linked into the kernel's privileged execution environment,
+      including but not limited to modules, extensions and any code that
+      executes with kernel authority;
+
+  (c) any attempt to bypass, weaken, disable or render inoperative the
+      constitutional invariants defined in CONSTITUTION.md — in particular
+      the user-sovereignty invariant, which guarantees that the person
+      operating a device can see what agents did on it, revoke any capability
+      granted to them, and refuse any action requiring attestation.
+
+A distribution that removes or defeats those guarantees is a modified kernel
+under (a) and (c). It is not covered by this exception, and distributing it
+without the corresponding complete source under GPL-3.0-or-later is a licence
+violation.
+
+RATIONALE
+---------
+
+The copyleft in this project is structural rather than ideological. It is the
+legal mechanism that prevents a manufacturer from shipping a locked-down build
+of a watch, a car or a pair of glasses in which the operator has lost the
+ability to see, revoke and refuse. The architecture enforces user sovereignty
+technically; this licence makes it defensible legally. Neither is sufficient
+alone.

@@ -1,0 +1,53 @@
+# Words that are strong signals of non-English prose in this repository.
+#
+# Deliberately short. This list raises a hand; a reviewer decides (invariant 10,
+# advisory in CI, binding in review).
+#
+# Selection rule: a word belongs here only if it is common in another language
+# AND essentially never appears as a standalone word in English technical text.
+# "son", "sans", "plus", "fait" and "chat" are therefore excluded despite being
+# common French words — the false positives would train people to ignore this
+# check, which is worse than not running it.
+#
+# One word per line, case-insensitive, matched on word boundaries.
+# Lines starting with # are comments.
+
+# French
+avec
+ainsi
+alors
+aucun
+cependant
+cette
+chaque
+comme
+dans
+donc
+également
+lorsque
+mais
+notamment
+parce
+pendant
+plutôt
+pourquoi
+puisque
+toujours
+toutefois
+également
+
+# Spanish
+aunque
+entonces
+mientras
+porque
+siempre
+también
+
+# German
+aber
+auch
+jedoch
+sondern
+weil
+wenn

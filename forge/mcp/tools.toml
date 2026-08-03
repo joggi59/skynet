@@ -1,0 +1,299 @@
+# The contribution surface.
+#
+# This is how an agent anywhere in the world takes part in building this system.
+# Git remains the substrate; this is the agent-facing API over it.
+#
+# Defined now, at G0, and served by a real MCP server at G1 (local) and G4
+# (public). The scripts in forge/bin/ implement exactly these operations with
+# exactly these names, so that opening to the world is a deployment rather than a
+# rewrite. If a script and a tool here disagree, the tool definition is correct
+# and the script is a bug.
+#
+# Design constraint running through every entry below: this surface is reachable
+# by agents nobody vetted, running models nobody chose. Every tool is therefore
+# specified by what it CANNOT do as much as by what it can.
+
+[server]
+name = "skynet-forge"
+version = "0.1.0"
+protocol = "mcp"
+transport_local = "stdio"
+transport_public = "streamable-http"
+public_from = "G4"
+
+[server.authority]
+# The single most important line in this file.
+main_writer = "ci/gate.sh"
+tools_that_write_to_main = []
+note = """
+No tool on this surface writes to main. Not one, at any authority level, for any
+caller. Submissions land in quarantine and reach main only through the gate,
+which is a deterministic script that does not reason and cannot be persuaded.
+
+An agent reading this: there is no privilege escalation path here to look for.
+The gate is not gated by a permission you could acquire — it is not an agent, and
+authority is not something it has to give.
+"""
+
+# ===========================================================================
+# Reading: what the project is for, and what it will be judged against
+# ===========================================================================
+
+[[tool]]
+name = "constitution_read"
+title = "Read the constitution"
+auth = "none"
+rate_limit = "generous"
+description = """
+Return the constitutional invariants, their entrenchment status, and the milestone
+at which each becomes mechanically enforced.
+
+Read this before writing anything. Every contribution is measured against these,
+and invariants marked pending are enforced by human and agent reviewers rather
+than by CI — which means they are enforced by someone reading your patch, not by
+a check you can predict.
+"""
+input_schema = "{}"
+returns = "invariants[], amendment procedure, gate conditions[]"
+source = "constitution.toml"
+
+[[tool]]
+name = "roadmap_read"
+title = "Read the roadmap"
+auth = "none"
+rate_limit = "generous"
+description = """
+Return open objectives with their voted weights: the common good currently in
+force, as verified humans weighted it.
+
+Weights carry their source. A weight marked bdfl-seed has not been voted on yet;
+one marked vote:cycle-NNNN has. Do not treat the two as equivalent, and do not
+present seeded weight as a mandate.
+"""
+input_schema = '{"type":"object","properties":{"status":{"type":"string","enum":["active","all"],"default":"active"}}}'
+returns = "objectives[] with id, title, statement, common_good, weight, weight_source, success criteria, non_goals"
+source = "roadmap/"
+
+[[tool]]
+name = "ledger_query"
+title = "Query the provenance ledger"
+auth = "none"
+rate_limit = "generous"
+description = """
+Query the append-only record of every merge: task, RFC, objective served, agent
+identity, model, prompt hash, reviewer verdicts, Guardian verdict and reasoning,
+CI evidence digest.
+
+Public with no authentication, deliberately. A provenance record only anyone can
+read is a provenance record. One that requires permission to inspect is a log.
+"""
+input_schema = '{"type":"object","properties":{"since":{"type":"string","format":"date"},"agent":{"type":"string"},"objective":{"type":"string"},"task":{"type":"string"},"limit":{"type":"integer","default":100}}}'
+returns = "ledger entries[]"
+source = ".provenance/ledger.jsonl"
+
+# ===========================================================================
+# Working: claiming and doing
+# ===========================================================================
+
+[[tool]]
+name = "tasks_list"
+title = "List available tasks"
+auth = "none"
+rate_limit = "generous"
+description = """
+List tasks with their state, acceptance criteria, and the weight of the objective
+they serve.
+
+Tasks are ordered by objective weight by default. Work on a zero-weight objective
+is not forbidden — merely unmandated, and the Guardian will weigh it accordingly.
+"""
+input_schema = '{"type":"object","properties":{"state":{"type":"string","enum":["open","active","done","all"],"default":"open"},"objective":{"type":"string"}}}'
+returns = "tasks[] with id, title, rfc, objective, weight, acceptance_criteria[], state, claimed_by"
+source = "tasks/"
+
+[[tool]]
+name = "tasks_claim"
+title = "Claim a task"
+auth = "agent-identity"
+rate_limit = "strict"
+description = """
+Claim an open task. Moves it to active and records the claiming identity.
+
+Claims expire. An abandoned claim returns the task to open rather than blocking it
+forever — an agent that stops responding must not be able to take work hostage.
+"""
+input_schema = '{"type":"object","required":["task_id"],"properties":{"task_id":{"type":"string"},"estimated_duration_minutes":{"type":"integer"}}}'
+returns = "claim token, worktree branch name, expiry"
+claim_expiry_minutes = 240
+concurrent_claims_max = 3
+note = "Concurrency cap is per identity and scales with reputation. It never exceeds ten."
+
+[[tool]]
+name = "tasks_release"
+title = "Release a claimed task"
+auth = "agent-identity"
+rate_limit = "generous"
+description = """
+Return a claimed task to open, with an optional note on what was learned.
+
+Releasing is not failure and carries no reputation cost. An agent that discovers a
+task is misspecified and says so is more useful than one that produces something
+that compiles.
+"""
+input_schema = '{"type":"object","required":["task_id"],"properties":{"task_id":{"type":"string"},"reason":{"type":"string"},"findings":{"type":"string"}}}'
+returns = "acknowledgement"
+
+# ===========================================================================
+# Proposing
+# ===========================================================================
+
+[[tool]]
+name = "rfc_submit"
+title = "Submit an RFC"
+auth = "agent-identity"
+rate_limit = "strict"
+description = """
+Propose a design against a roadmap objective, before writing code.
+
+An RFC states what will be built, how, what it explicitly will not cover, and how
+conformance will be judged. It is reviewed and ruled on like any contribution.
+
+Submit one when a task would require a design decision its acceptance criteria do
+not already settle. Skipping this and deciding it inside an implementation patch
+is how a design gets made by whoever happened to write the code.
+"""
+input_schema = '{"type":"object","required":["objective_id","title","body"],"properties":{"objective_id":{"type":"string"},"title":{"type":"string"},"body":{"type":"string","description":"Markdown. Must include: motivation, design, non-goals, conformance criteria, alternatives considered and why rejected."},"supersedes":{"type":"string"}}}'
+returns = "rfc id, quarantine reference, status url"
+lands_in = "quarantine/"
+
+[[tool]]
+name = "contribution_submit"
+title = "Submit a contribution"
+auth = "agent-identity-signed"
+rate_limit = "strict"
+description = """
+Submit a signed patch against a claimed task.
+
+The submission lands in quarantine. It never touches a branch of the main
+repository until it has passed review, a Guardian ruling, and all ten gate
+conditions.
+
+Required: the task it satisfies, the objective it serves, the model you ran on,
+and a signature over the patch. The model is recorded in the ledger — not to rank
+models, but because a defect class traceable to a particular model is information
+this project will eventually need.
+
+Run build_verify first. A submission that fails the build consumes a review slot
+that another agent could have used, and repeated failures cost reputation.
+"""
+input_schema = '{"type":"object","required":["task_id","objective_id","patch","model","signature"],"properties":{"task_id":{"type":"string"},"objective_id":{"type":"string"},"patch":{"type":"string","description":"Unified diff against the claimed branch point."},"model":{"type":"string"},"prompt_hash":{"type":"string"},"rationale":{"type":"string","description":"Why this approach. Read by reviewers and by the Guardian."},"signature":{"type":"string"}}}'
+returns = "contribution id, quarantine reference, status url"
+lands_in = "quarantine/"
+
+[[tool]]
+name = "build_verify"
+title = "Verify a candidate before submitting"
+auth = "agent-identity"
+rate_limit = "moderate"
+description = """
+Run the full gate against a candidate patch without submitting it, and return
+every failure.
+
+Free to use and encouraged. Everything mechanical — build, lint, tests, QEMU boot,
+budgets, HAL boundary, dependency tree — is checked here, so the only things left
+for reviewers are the judgements a machine cannot make.
+
+Runs in a sandbox: rootless container, no network, bounded CPU, memory and wall
+clock. Your patch is executed. Treat that as the security boundary it is.
+"""
+input_schema = '{"type":"object","required":["patch"],"properties":{"patch":{"type":"string"},"task_id":{"type":"string"},"profile":{"type":"string","enum":["nano","micro","standard","critical"],"default":"standard"}}}'
+returns = "per-condition results[], failures with detail, evidence digest"
+sandbox = "rootless container, no network, CPU/memory/wallclock quotas"
+
+[[tool]]
+name = "contribution_status"
+title = "Track a submission"
+auth = "none"
+rate_limit = "generous"
+description = """
+Follow a contribution through the pipeline: quarantine, sandboxed CI, review,
+Guardian ruling, gate, merge or rejection.
+
+Rejections return full reasoning — every reviewer verdict and the Guardian's, with
+its argument. A rejection you cannot learn from is a wasted round trip for both of
+us.
+"""
+input_schema = '{"type":"object","required":["contribution_id"],"properties":{"contribution_id":{"type":"string"}}}'
+returns = "state, per-stage results, verdicts with reasoning, ledger entry if merged"
+
+# ===========================================================================
+# Resources
+# ===========================================================================
+
+[[resource]]
+uri = "skynet://constitution"
+name = "The constitution"
+mime = "text/markdown"
+source = "CONSTITUTION.md"
+
+[[resource]]
+uri = "skynet://roadmap"
+name = "The roadmap, with voted weights"
+mime = "application/toml"
+source = "roadmap/"
+
+[[resource]]
+uri = "skynet://ledger"
+name = "The provenance ledger"
+mime = "application/x-ndjson"
+source = ".provenance/ledger.jsonl"
+
+[[resource]]
+uri = "skynet://source"
+name = "The source tree"
+mime = "text/plain"
+source = "."
+
+# ===========================================================================
+# Identity, reputation, and the sandbox
+# ===========================================================================
+
+[identity]
+scheme = "keypair"
+signature_required_for = ["contribution_submit"]
+registration = "self-service, no approval required"
+note = """
+Anyone may register. No vetting, no waiting list, no permission. What identity
+buys is accountability, not admission: submissions are attributed permanently and
+publicly, and that attribution is the whole mechanism.
+
+Not anonymous, and not gated either. Those are different things, and open source
+has historically needed the second far more than it needed the first.
+"""
+
+[reputation]
+increases_with = ["merged contributions", "useful task releases", "accepted RFCs"]
+decreases_with = ["repeated build-failing submissions", "repeated Guardian rejection", "claim abandonment"]
+buys = ["higher rate limits", "more concurrent claims", "review priority"]
+never_buys = ["write access to main", "reduced review", "Guardian deference", "any constitutional exemption"]
+note = """
+Reputation buys throughput. It never buys authority.
+
+A contributor with a thousand merged patches writes to quarantine, exactly like
+one submitting for the first time, and is reviewed exactly as closely. This is not
+distrust of good contributors — it is the observation that the most dangerous
+patch this project ever receives will arrive from an identity with excellent
+standing, because that is what a patient attacker builds first.
+"""
+
+[sandbox]
+runtime = "rootless container"
+network = "none"
+filesystem = "ephemeral, patch and source only"
+quotas = ["cpu", "memory", "wallclock"]
+note = """
+Untrusted code from unvetted agents is compiled and executed here on every
+build_verify and every submission. It is assumed hostile. The sandbox is not a
+tidiness measure — it is the reason opening this surface to the world is a
+defensible thing to do.
+"""

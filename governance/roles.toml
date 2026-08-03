@@ -1,0 +1,206 @@
+# Roles and their authority.
+#
+# The kernel's first invariant is that nothing is reachable by default. The same
+# rule governs the people and agents building it: a role reaches only what it was
+# explicitly granted, and no role holds authority merely by being trusted.
+#
+# Read `may_write` as scoped to the role's own branch or worktree. NO role writes
+# to main. main has exactly one writer — ci/gate.sh — and it is a deterministic
+# script, not an agent, precisely so that it cannot be persuaded.
+
+[meta]
+version = 1
+main_writer = "ci/gate.sh"
+main_writer_kind = "deterministic-script"
+note = """
+Every role below can be held by any model. Identity is per-agent, not per-model:
+an agent is identified by its keypair, and the model it ran on is recorded
+alongside in the ledger. Two agents on the same model are two contributors.
+"""
+
+# ---------------------------------------------------------------------------
+# Human roles
+# ---------------------------------------------------------------------------
+
+[[role]]
+id = "bdfl"
+kind = "human"
+holder = "johan"
+purpose = "Final human authority. Holds the veto and assents to entrenched amendments."
+may_write = ["**"]
+may_not = [
+    "amend an entrenched invariant without supermajority",
+    "amend anything in the cycle in which it was proposed",
+    "rewrite the provenance ledger",
+]
+note = """
+The broadest grant in this file, and still not unlimited. The BDFL cannot enact an
+entrenched amendment alone — that needs supermajority as well — and cannot rewrite
+history at all. A benevolent dictator who can erase the record is just a dictator.
+"""
+
+[[role]]
+id = "elector"
+kind = "human"
+purpose = "Verified human who allocates voting credits across roadmap objectives."
+may_write = ["roadmap/votes/cycle-*/"]
+may_not = ["everything else"]
+eligibility = "governance/VOTING.md"
+active_from = "G3"
+
+# ---------------------------------------------------------------------------
+# Agent roles — the forge
+# ---------------------------------------------------------------------------
+
+[[role]]
+id = "architect"
+kind = "agent"
+purpose = "Turns a roadmap objective into an RFC: a design with enough specificity to be implemented and judged."
+prompt = "forge/prompts/architect.md"
+may_write = ["rfcs/"]
+may_read = ["**"]
+may_not = ["kernel/", "roadmap/", "CONSTITUTION.md", "constitution.toml", "governance/", "ci/"]
+
+[[role]]
+id = "decomposer"
+kind = "agent"
+purpose = "Turns an RFC into tasks with acceptance criteria that a machine can evaluate."
+prompt = "forge/prompts/decomposer.md"
+may_write = ["tasks/open/"]
+may_read = ["**"]
+may_not = ["kernel/", "rfcs/", "roadmap/", "CONSTITUTION.md", "constitution.toml", "governance/", "ci/"]
+
+[[role]]
+id = "implementer"
+kind = "agent"
+purpose = "Takes one task and produces a patch that satisfies its acceptance criteria."
+prompt = "forge/prompts/implementer.md"
+may_write = ["kernel/", "tasks/active/"]
+may_read = ["**"]
+may_not = ["rfcs/", "roadmap/", "CONSTITUTION.md", "constitution.toml", "governance/", "ci/", ".provenance/"]
+isolation = "git-worktree"
+note = """
+The implementer cannot edit the CI that judges it, the constitution it is judged
+against, or the RFC defining what it was asked to build. An implementer that can
+relax its own acceptance criteria has no acceptance criteria.
+"""
+
+[[role]]
+id = "reviewer-safety"
+kind = "agent"
+purpose = "Audits every unsafe block: what invariant makes it sound, and is that invariant actually upheld."
+prompt = "forge/prompts/reviewer-safety.md"
+may_write = []
+emits = "verdict"
+lens = """
+Memory safety, aliasing, initialisation, volatile and MMIO correctness, exception
+and concurrency reentrancy. Assumes the implementer was competent and wrong, which
+is the common case for unsafe code.
+"""
+
+[[role]]
+id = "reviewer-conformance"
+kind = "agent"
+purpose = "Checks the patch against the RFC and the task's acceptance criteria — what was asked, not what is pleasant."
+prompt = "forge/prompts/reviewer-conformance.md"
+may_write = []
+emits = "verdict"
+lens = "Specification conformance, scope creep, unmet criteria, silently dropped requirements."
+
+[[role]]
+id = "reviewer-constitution"
+kind = "agent"
+purpose = "Checks the patch against every constitutional invariant, including those not yet mechanically enforced."
+prompt = "forge/prompts/reviewer-constitution.md"
+may_write = []
+emits = "verdict"
+lens = """
+The invariants marked pending matter most here. A mechanical check cannot yet
+catch an ambient-authority violation introduced at M1; a reader can. This reviewer
+is the enforcement for everything CI cannot reach yet.
+"""
+
+[[role]]
+id = "guardian"
+kind = "agent-panel"
+purpose = "Rules on whether a contribution genuinely serves the roadmap objective it claims — the common good, as humans weighted it."
+prompt = "forge/prompts/guardian.md"
+may_write = []
+emits = "verdict-with-reasoning"
+panel_size = 3
+approve_quorum = 2
+may_approve_alone = false
+may_reject_alone = true
+independence = "Panel members must not see each other's verdicts before submitting their own."
+may_not = [
+    "CONSTITUTION.md",
+    "constitution.toml",
+    "roadmap/",
+    "governance/",
+    "ci/",
+]
+note = """
+The Guardian judges against the constitution and the roadmap, and cannot write
+either. That separation is the whole point: a judge who can edit the law is not
+a judge.
+
+A panel rather than a single super-agent, because one judge is one point of
+capture — corrupt it and the definition of the common good is corrupted with
+nothing to signal it. Verdicts are published with their reasoning, so a dissent is
+visible and can be argued with. Disagreement inside the panel is a signal, not a
+malfunction.
+"""
+
+[[role]]
+id = "integrator"
+kind = "agent"
+purpose = "Assembles the contribution record and invokes the gate. Does not decide anything."
+prompt = "forge/prompts/integrator.md"
+may_write = []
+may_invoke = ["ci/gate.sh"]
+note = """
+Deliberately powerless. The integrator collects verdicts and evidence and runs the
+gate; it has no discretion, and the gate ignores its opinion. If this role were
+able to decide, it would be the place to attack.
+"""
+
+# ---------------------------------------------------------------------------
+# The outside world
+# ---------------------------------------------------------------------------
+
+[[role]]
+id = "contributor"
+kind = "agent"
+purpose = "Any agent, anywhere, any model. Submits through the MCP server."
+prompt = "not-applicable"
+may_write = ["quarantine/"]
+may_read = ["**"]
+identity = "keypair, signed submissions, recorded in the ledger"
+active_from = "G4"
+note = """
+Granted the least authority of any role in this file, which is the correct default
+for an identity nobody has vouched for. A submission lands in quarantine, is built
+and tested in a sandbox with no network, and reaches a branch only after the same
+review, Guardian ruling and gate every internal contribution passes.
+
+Reputation accrues with merged contributions and decays with repeated rejection.
+It buys rate limit and priority. It never buys authority — a contributor with a
+thousand merges still writes only to quarantine.
+"""
+
+# ---------------------------------------------------------------------------
+# Not a role
+# ---------------------------------------------------------------------------
+
+[[non_role]]
+id = "gate"
+kind = "deterministic-script"
+path = "ci/gate.sh"
+purpose = "The only writer of main."
+note = """
+Listed here because it holds the highest authority in the system and it is
+deliberately not an agent. It does not reason, cannot be persuaded, cannot be
+prompt-injected, and behaves identically on the ten thousandth contribution as on
+the first. Every judgement call in this project is made by something that can be
+argued with; every enforcement is made by something that cannot.
+"""

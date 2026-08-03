@@ -1,0 +1,311 @@
+# Machine-checkable form of CONSTITUTION.md.
+#
+# CONSTITUTION.md is authoritative for meaning; this file is authoritative for
+# enforcement. They must not drift: ci/constitution-check.sh verifies that every
+# invariant here has a corresponding section there, and vice versa.
+#
+# Parsed with python3 -c 'import tomllib' (stdlib since 3.11).
+
+[meta]
+version = 1
+authoritative_prose = "CONSTITUTION.md"
+# Bump only through the amendment procedure below. ci/gate.sh records this
+# version in every provenance line, so any change is visible in the ledger.
+
+# Milestones at which each invariant becomes mechanically enforceable.
+# An invariant whose milestone has not been reached reports "pending".
+# Pending is never reported as pass.
+[milestones]
+reached = ["G0"]
+
+# ---------------------------------------------------------------------------
+# Invariants
+# ---------------------------------------------------------------------------
+
+[[invariant]]
+number = 1
+id = "no_ambient_authority"
+title = "No ambient authority"
+summary = """
+Nothing is reachable by default. Every access passes through an explicitly
+handed capability: unforgeable, attenuable, revocable, expirable. A holder can
+pass a weaker version of what it holds, never a stronger one."""
+entrenched = true
+enforced_from = "M4"
+enforcement = "blocking"
+check_kind = "test-suite"
+check = "cargo test -p kernel --test capability_confinement"
+check_intent = """
+Grant a process a known capability set, then prove it cannot reach anything
+outside that set."""
+
+[[invariant]]
+number = 2
+id = "user_sovereignty"
+title = "User sovereignty"
+summary = """
+On every device, the operator can SEE the complete unedited record of what
+agents did, REVOKE any capability granted to them, and REFUSE any action
+requiring attestation. No agent, manufacturer, vendor or update may remove,
+weaken, bypass or make conditional any of these three powers."""
+entrenched = true
+enforced_from = "M5"
+enforcement = "blocking"
+check_kind = "test-suite"
+check = "cargo test -p kernel --test user_sovereignty"
+check_intent = """
+Prove the ledger is readable and unforgeable from the operator side; that
+revocation takes effect immediately and cannot be refused by the holder; and
+that no code path performs an attested action without attestation."""
+license_link = "LICENSE.syscall-exception"
+
+[[invariant]]
+number = 3
+id = "total_provenance"
+title = "Total provenance"
+summary = """
+Every line traceable to the task, RFC, roadmap objective, agent identity and
+signature, model, prompt hash, reviewer verdicts, Guardian verdict and reasoning,
+and CI evidence digest. The ledger is append-only."""
+entrenched = true
+enforced_from = "G0"
+enforcement = "blocking"
+check_kind = "gate"
+check = "ci/gate.sh --check provenance"
+check_intent = """
+Refuse any merge whose provenance record is missing, malformed or unsigned.
+Refuse any change that rewrites an existing ledger line."""
+ledger = ".provenance/ledger.jsonl"
+
+[[invariant]]
+number = 4
+id = "frugality_per_profile"
+title = "Frugality, per profile"
+summary = """
+Each device profile carries hard budgets: image size, boot-time memory, boot
+duration. Measured on every contribution. A regression is a failure."""
+entrenched = false
+enforced_from = "M0"
+enforcement = "blocking"
+check_kind = "gate"
+check = "ci/gate.sh --check budgets"
+check_intent = """
+Measure the built artefact against the active profile in profiles/ and fail on
+any regression."""
+profiles_dir = "profiles"
+
+[[invariant]]
+number = 5
+id = "zero_telemetry"
+title = "Zero telemetry"
+summary = """
+The system emits nothing outward that the operator did not explicitly grant
+through a capability. No analytics, no crash reporter, no usage statistics, no
+beacon, no covert timing channel standing in for one. No exception for this
+project's own developers."""
+entrenched = true
+enforced_from = "M6"
+enforcement = "blocking"
+check_kind = "script"
+check = "ci/constitution-check.sh --check zero-telemetry"
+check_intent = """
+Verify the base image contains no outbound network path reachable other than
+through an explicitly granted capability."""
+
+[[invariant]]
+number = 6
+id = "hal_boundary"
+title = "HAL boundary"
+summary = """
+No architecture-specific code outside kernel/src/arch/. Not one register name,
+not one inline assembly block, not one address constant."""
+entrenched = false
+enforced_from = "M0"
+enforcement = "blocking"
+check_kind = "script"
+check = "ci/constitution-check.sh --check hal-boundary"
+hal_dir = "kernel/src/arch"
+# Constructs that may appear only inside hal_dir.
+forbidden_outside_hal = [
+    "core::arch::",
+    "asm!",
+    "naked_asm!",
+    "global_asm!",
+    "#[naked]",
+    "target_arch",
+]
+
+[[invariant]]
+number = 7
+id = "no_kernel_dependencies"
+title = "No kernel dependencies"
+summary = """
+The kernel's dependency tree is empty. No spin, no bitflags, no log — we write
+them. User space may depend on whatever it likes; this binds kernel/ alone."""
+entrenched = false
+enforced_from = "M0"
+enforcement = "blocking"
+check_kind = "script"
+check = "ci/constitution-check.sh --check no-kernel-deps"
+manifest = "kernel/Cargo.toml"
+
+[[invariant]]
+number = 8
+id = "roadmap_alignment"
+title = "Roadmap alignment"
+summary = """
+Every contribution names the roadmap objective it serves, and the Guardian has
+ruled on whether it genuinely serves it. Effort without direction is not
+contribution."""
+entrenched = false
+enforced_from = "G0"
+enforcement = "blocking"
+check_kind = "gate"
+check = "ci/gate.sh --check roadmap-alignment"
+roadmap_dir = "roadmap"
+
+[[invariant]]
+number = 9
+id = "agents_do_not_vote"
+title = "Agents do not vote"
+summary = """
+The electorate is human and verified. Agents propose, implement, review and judge
+against a mandate; they do not set the mandate. Ballots are public, stored in the
+repository, attributed. Transparency is the primary defence, not cryptography."""
+entrenched = true
+enforced_from = "G3"
+enforcement = "blocking"
+check_kind = "script"
+check = "ci/constitution-check.sh --check electorate"
+check_intent = """
+Verify every ballot against the human electorate register. Any ballot
+attributable to an agent identity invalidates the cycle."""
+ballots_dir = "roadmap/votes"
+
+[[invariant]]
+number = 10
+id = "english_repository"
+title = "English repository"
+summary = """
+Everything in the repository is in English: code, comments, documents, roadmap,
+RFCs, tasks, prompts, commit messages, website, MCP tool surface."""
+entrenched = false
+enforced_from = "G0"
+enforcement = "advisory"
+check_kind = "heuristic"
+check = "ci/constitution-check.sh --check english"
+check_intent = """
+No script detects language reliably. The lint raises a hand on likely non-English
+additions; a reviewer decides. Advisory in CI, binding in review."""
+
+# ---------------------------------------------------------------------------
+# Amendment procedure
+#
+# Entrenched by itself. Without that, a captured majority amends this section in
+# one cycle and everything else in the next. The lock has to lock itself.
+# ---------------------------------------------------------------------------
+
+[amendment]
+self_entrenched = true         # this procedure is amendable only under tier_entrenched
+agents_may_propose = true      # in public, on the record
+agents_may_enact = false       # never
+
+[amendment.tier_ordinary]
+applies_to = [
+    "roadmap_priorities",
+    "frugality_per_profile",
+    "hal_boundary",
+    "no_kernel_dependencies",
+    "roadmap_alignment",
+    "english_repository",
+]
+threshold = "majority"
+cycles_required = 1
+bdfl_assent_required = false
+
+[amendment.tier_entrenched]
+applies_to = [
+    "no_ambient_authority",
+    "user_sovereignty",
+    "total_provenance",
+    "zero_telemetry",
+    "agents_do_not_vote",
+    "amendment",                # self-referential on purpose
+]
+threshold = "supermajority"
+supermajority_fraction = 0.75
+cycles_required = 2
+same_cycle_as_proposal_forbidden = true
+bdfl_assent_required = true
+
+# ---------------------------------------------------------------------------
+# The merge gate: ten conditions, all mandatory.
+# ci/gate.sh is the only writer of main. No agent writes to main. Ever.
+# ---------------------------------------------------------------------------
+
+[[gate_condition]]
+number = 1
+id = "build"
+description = "Kernel builds for the active profile target"
+command = "ci/build.sh"
+
+[[gate_condition]]
+number = 2
+id = "lint"
+description = "clippy reports zero warnings"
+command = "ci/build.sh --lint"
+
+[[gate_condition]]
+number = 3
+id = "tests"
+description = "Unit tests pass"
+command = "ci/build.sh --test"
+
+[[gate_condition]]
+number = 4
+id = "boot"
+description = "Kernel boots under QEMU, prints its marker, shuts down cleanly via PSCI"
+command = "ci/boot-test.sh"
+
+[[gate_condition]]
+number = 5
+id = "budgets"
+description = "Profile budgets held, no regression"
+invariant = "frugality_per_profile"
+
+[[gate_condition]]
+number = 6
+id = "hal"
+description = "HAL boundary respected"
+invariant = "hal_boundary"
+
+[[gate_condition]]
+number = 7
+id = "deps"
+description = "Kernel dependency tree empty"
+invariant = "no_kernel_dependencies"
+
+[[gate_condition]]
+number = 8
+id = "reviewers"
+description = "Reviewer quorum reached"
+quorum_fraction = 0.67
+reviewers = ["reviewer-safety", "reviewer-conformance", "reviewer-constitution"]
+
+[[gate_condition]]
+number = 9
+id = "guardian"
+description = "Guardian panel quorum reached"
+# The Guardian may reject alone but never approve alone: an approval is only
+# meaningful in combination with the nine other conditions. Fail-safe by default.
+panel_size = 3
+approve_quorum = 2
+reject_requires = 1
+may_approve_alone = false
+may_reject_alone = true
+
+[[gate_condition]]
+number = 10
+id = "provenance"
+description = "Provenance record signed and well-formed"
+invariant = "total_provenance"

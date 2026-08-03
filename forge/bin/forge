@@ -1,0 +1,357 @@
+#!/usr/bin/env bash
+# The forge — local implementation of the contribution surface.
+#
+# Every subcommand here corresponds one-to-one with a tool in
+# forge/mcp/tools.toml, with the same name and the same semantics. The MCP
+# server at G1 is a thin wrapper over this file, and the public server at G4
+# is the same wrapper with authentication and a sandbox in front.
+#
+# That correspondence is the point: opening this project to the world's agents
+# should be a deployment, not a rewrite. If a subcommand here and a tool there
+# disagree, the tool definition is correct and this file is a bug.
+#
+#   forge <tool> [args...]        run a tool
+#   forge --list                  list the tools
+#   forge <tool> --json           machine-readable output
+#
+# Human-readable by default; --json for callers that parse.
+
+source "$(dirname "${BASH_SOURCE[0]}")/../../ci/lib.sh"
+cd "$REPO_ROOT" || die "cannot enter repo root"
+
+TOOLS="$REPO_ROOT/forge/mcp/tools.toml"
+FORGE_DIR="$REPO_ROOT/.forge/contributions"
+WORKTREES="$REPO_ROOT/.worktrees"
+LEDGER="$REPO_ROOT/.provenance/ledger.jsonl"
+JSON=0
+
+# Strip --json from the argument list wherever it appears.
+ARGS=()
+for a in "$@"; do
+    case "$a" in --json) JSON=1 ;; *) ARGS+=("$a") ;; esac
+done
+set -- "${ARGS[@]+"${ARGS[@]}"}"
+
+# ---------------------------------------------------------------------------
+# Reading
+# ---------------------------------------------------------------------------
+
+t_constitution_read() {
+    if [ "$JSON" -eq 1 ]; then
+        python3 -c "
+import tomllib,json
+d=tomllib.load(open('$REPO_ROOT/constitution.toml','rb'))
+print(json.dumps({'invariants':d['invariant'],'amendment':d['amendment'],
+                  'gate_conditions':d['gate_condition'],
+                  'milestones_reached':d['milestones']['reached']},indent=2))"
+    else
+        "$REPO_ROOT/ci/constitution-check.sh" --list
+        echo
+        info "Full text: CONSTITUTION.md"
+        info "Invariants marked pending are enforced by reviewers, not by CI."
+    fi
+}
+
+t_roadmap_read() {
+    if [ "$JSON" -eq 1 ]; then
+        python3 -c "
+import tomllib,json,glob
+out=[]
+for f in sorted(glob.glob('$REPO_ROOT/roadmap/*.toml')):
+    o=tomllib.load(open(f,'rb'))['objective']
+    o['_file']=f.replace('$REPO_ROOT/','')
+    out.append(o)
+print(json.dumps(out,indent=2))"
+    else
+        heading "Roadmap — the common good currently in force"
+        python3 -c "
+import tomllib,glob
+for f in sorted(glob.glob('$REPO_ROOT/roadmap/*.toml')):
+    d=tomllib.load(open(f,'rb'))
+    o=d['objective']
+    print(f\"\n  {o['id']}  {o['title']}   [{o['status']}]\")
+    print(f\"      weight {o['weight']}  ({o['weight_source']})\")
+    if o['weight_source']=='bdfl-seed':
+        print('      note: seeded, not yet voted — carries less mandate than a voted weight')
+    print(f\"      {o['statement'].strip().splitlines()[0]}\")
+    ng=d.get('objective',{}).get('non_goals',{}).get('excluded',[])
+    if ng: print(f\"      non-goals: {len(ng)} exclusions — read them before proposing work\")
+"
+    fi
+}
+
+t_ledger_query() {
+    if [ ! -f "$LEDGER" ] || [ ! -s "$LEDGER" ]; then
+        [ "$JSON" -eq 1 ] && echo '[]' || info "ledger is empty — nothing has been merged yet"
+        return
+    fi
+    if [ "$JSON" -eq 1 ]; then
+        python3 -c "
+import json
+print(json.dumps([json.loads(l) for l in open('$LEDGER') if l.strip()],indent=2))"
+    else
+        heading "Provenance ledger"
+        python3 -c "
+import json
+for l in open('$LEDGER'):
+    if not l.strip(): continue
+    e=json.loads(l)
+    if e.get('event')=='veto':
+        print(f\"  {e['contribution_id']:14} VETOED by {e['vetoed_by']}  {e.get('reason','(no reason given)')}\")
+        continue
+    g=e.get('guardian_verdicts',[])
+    r=e.get('reviewer_verdicts',[])
+    ga=sum(1 for x in g if x['verdict']=='approve')
+    ra=sum(1 for x in r if x['verdict']=='approve')
+    print(f\"  {e['contribution_id']:14} {e['task']:9} obj {e['objective']} (w{e.get('objective_weight','?')})  \"
+          f\"{e['agent']:12} {e['model']:24} rev {ra}/{len(r)} grd {ga}/{len(g)}  {e.get('commit','')[:8]}\")
+"
+    fi
+}
+
+t_tasks_list() {
+    local state="${1:-open}"
+    if [ "$JSON" -eq 1 ]; then
+        python3 -c "
+import tomllib,json,glob,os
+out=[]
+for st in (['open','active','done'] if '$state'=='all' else ['$state']):
+    for f in sorted(glob.glob(f'$REPO_ROOT/tasks/{st}/*.toml')):
+        t=tomllib.load(open(f,'rb'))['task']
+        t['_state']=st; t['_file']=f.replace('$REPO_ROOT/','')
+        out.append(t)
+print(json.dumps(out,indent=2))"
+    else
+        heading "Tasks — $state"
+        local found=0
+        for st in $([ "$state" = all ] && echo "open active done" || echo "$state"); do
+            for f in "$REPO_ROOT/tasks/$st"/*.toml; do
+                [ -e "$f" ] || continue
+                found=1
+                python3 -c "
+import tomllib
+t=tomllib.load(open('$f','rb'))['task']
+print(f\"  {t['id']:9} [{'$st':6}] {t['title']}\")
+print(f\"            rfc {t.get('rfc','-')}  objective {t.get('objective','-')}  \"
+      f\"difficulty {t.get('estimated_difficulty','-')}  profile {t.get('profile','standard')}\")
+c=t.get('acceptance',{}).get('criteria',[]) if isinstance(t.get('acceptance'),dict) else []
+"
+                python3 -c "
+import tomllib
+d=tomllib.load(open('$f','rb'))
+c=d.get('task',{}).get('acceptance',{}).get('criteria',[])
+for x in c: print(f'              - {x}')
+" 2>/dev/null || true
+            done
+        done
+        [ "$found" -eq 0 ] && info "no tasks in state '$state'"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Working
+# ---------------------------------------------------------------------------
+
+t_tasks_claim() {
+    local id="${1:-}"
+    [ -n "$id" ] || die "usage: forge tasks_claim <task-id>"
+    local src="$REPO_ROOT/tasks/open/$id.toml"
+    [ -f "$src" ] || die "task '$id' is not open (looked for ${src#$REPO_ROOT/})"
+
+    local branch="task/$id"
+    local wt="$WORKTREES/$id"
+
+    if git rev-parse --verify "$branch" >/dev/null 2>&1; then
+        die "branch '$branch' already exists — task may already be claimed"
+    fi
+
+    mkdir -p "$WORKTREES"
+    git worktree add -q -b "$branch" "$wt" HEAD || die "could not create worktree"
+
+    # The task moves to active on the claiming branch, not on main. Nothing
+    # reaches main except through the gate — including a claim.
+    mkdir -p "$wt/tasks/active"
+    git -C "$wt" mv "tasks/open/$id.toml" "tasks/active/$id.toml" 2>/dev/null \
+        || { mv "$wt/tasks/open/$id.toml" "$wt/tasks/active/$id.toml"; git -C "$wt" add -A tasks; }
+    git -C "$wt" commit -q -m "$id: claimed" || true
+
+    heading "Claimed $id"
+    info "branch     $branch"
+    info "worktree   ${wt#$REPO_ROOT/}"
+    info "expiry     4h (an abandoned claim returns the task to open)"
+    echo
+    info "Work only inside the worktree. Before submitting, run:"
+    detail "cd ${wt#$REPO_ROOT/} && ../../ci/build.sh --all && ../../ci/boot-test.sh"
+}
+
+t_tasks_release() {
+    local id="${1:-}" reason="${2:-}"
+    [ -n "$id" ] || die "usage: forge tasks_release <task-id> [reason]"
+    local wt="$WORKTREES/$id" branch="task/$id"
+
+    heading "Released $id"
+    [ -d "$wt" ] && { git worktree remove --force "$wt" 2>/dev/null || true; }
+    git branch -D "$branch" >/dev/null 2>&1 || true
+    [ -f "$REPO_ROOT/tasks/active/$id.toml" ] && git mv "tasks/active/$id.toml" "tasks/open/$id.toml" 2>/dev/null || true
+
+    info "task returned to open"
+    [ -n "$reason" ] && info "reason: $reason"
+    info "Releasing is not failure and costs no reputation. A task released with a"
+    info "clear explanation of why it is misspecified is worth more than an"
+    info "implementation of the wrong thing."
+}
+
+t_build_verify() {
+    heading "build_verify — full mechanical check, nothing submitted"
+    info "Everything the gate checks mechanically runs here. Use it freely."
+    echo
+    "$REPO_ROOT/ci/build.sh" --all
+    "$REPO_ROOT/ci/boot-test.sh"
+    "$REPO_ROOT/ci/constitution-check.sh"
+    echo
+    info "Sandbox note: at G4 this runs in a rootless container with no network."
+    info "Locally it runs on your machine, so the isolation is yours to provide."
+}
+
+# ---------------------------------------------------------------------------
+# Submitting
+# ---------------------------------------------------------------------------
+
+t_contribution_submit() {
+    # forge contribution_submit <task-id> <agent> <model> [prompt-hash]
+    local task="${1:-}" agent="${2:-}" model="${3:-}" phash="${4:-}"
+    [ -n "$task" ] && [ -n "$agent" ] && [ -n "$model" ] \
+        || die "usage: forge contribution_submit <task-id> <agent> <model> [prompt-hash]"
+
+    local branch="task/$task"
+    git rev-parse --verify "$branch" >/dev/null 2>&1 || die "no branch '$branch' — claim the task first"
+
+    local objective rfc
+    local tf
+    tf=$(git show "$branch:tasks/active/$task.toml" 2>/dev/null) || \
+        tf=$(cat "$REPO_ROOT/tasks/open/$task.toml" 2>/dev/null) || die "cannot read task $task"
+    objective=$(echo "$tf" | python3 -c "import tomllib,sys;print(tomllib.loads(sys.stdin.read())['task'].get('objective',''))")
+    rfc=$(echo "$tf"       | python3 -c "import tomllib,sys;print(tomllib.loads(sys.stdin.read())['task'].get('rfc',''))")
+
+    local n id
+    n=$(( $(ls -1 "$FORGE_DIR" 2>/dev/null | grep -c '^C-' || true) + 1 ))
+    id=$(printf 'C-%04d' "$n")
+    local dir="$FORGE_DIR/$id"
+    mkdir -p "$dir/verdicts" "$dir/evidence"
+
+    cat > "$dir/contribution.toml" <<EOF
+[contribution]
+id          = "$id"
+task        = "$task"
+rfc         = "$rfc"
+objective   = "$objective"
+agent       = "$agent"
+model       = "$model"
+branch      = "$branch"
+prompt_hash = "$phash"
+signature   = ""
+EOF
+
+    heading "Submitted $id"
+    info "task $task   objective $objective   branch $branch"
+    info "record ${dir#$REPO_ROOT/}"
+    echo
+    info "Awaiting: 3 reviewer verdicts, then the Guardian panel, then the gate."
+    detail "verdicts go in ${dir#$REPO_ROOT/}/verdicts/"
+    detail "reviewer-safety.json  reviewer-conformance.json  reviewer-constitution.json"
+    detail "guardian-1.json  guardian-2.json  guardian-3.json"
+    echo
+    info "Nothing here writes to main. Only ci/gate.sh does."
+}
+
+t_contribution_status() {
+    local id="${1:-}"
+    [ -n "$id" ] || die "usage: forge contribution_status <contribution-id>"
+    local dir="$FORGE_DIR/$id"
+
+    if [ ! -d "$dir" ]; then
+        if [ -f "$LEDGER" ] && grep -q "\"$id\"" "$LEDGER"; then
+            heading "$id — merged"
+            python3 -c "
+import json
+for l in open('$LEDGER'):
+    e=json.loads(l)
+    if e.get('contribution_id')=='$id': print(json.dumps(e,indent=2))"
+            return
+        fi
+        die "no contribution '$id'"
+    fi
+
+    heading "$id — in flight"
+    python3 -c "
+import tomllib
+c=tomllib.load(open('$dir/contribution.toml','rb'))['contribution']
+for k in ('task','rfc','objective','agent','model','branch'):
+    print(f'         {k:12} {c.get(k,\"\")}')"
+    echo
+    for r in reviewer-safety reviewer-conformance reviewer-constitution guardian-1 guardian-2 guardian-3; do
+        local f="$dir/verdicts/$r.json"
+        if [ -f "$f" ]; then
+            python3 -c "
+import json
+d=json.load(open('$f'))
+n=sum(1 for x in d.get('findings',[]) if x.get('severity')=='blocking')
+print(f\"         {'$r':24} {d['verdict']:8} {d.get('confidence',''):7}\" + (f'  {n} blocking' if n else ''))"
+        else
+            printf '         %-24s %s\n' "$r" "awaiting"
+        fi
+    done
+}
+
+t_rfc_submit() {
+    local objective="${1:-}" file="${2:-}"
+    [ -n "$objective" ] && [ -n "$file" ] || die "usage: forge rfc_submit <objective-id> <file.md>"
+    [ -f "$file" ] || die "no such file: $file"
+    local n; n=$(( $(ls -1 "$REPO_ROOT/rfcs"/*.md 2>/dev/null | wc -l) + 1 ))
+    local id; id=$(printf '%04d' "$n")
+    local slug; slug=$(basename "$file" .md | sed 's/^[0-9]*-//')
+    local dest="$REPO_ROOT/rfcs/$id-$slug.md"
+    cp "$file" "$dest"
+    heading "RFC $id submitted"
+    info "objective $objective"
+    info "file ${dest#$REPO_ROOT/}"
+}
+
+# ---------------------------------------------------------------------------
+
+list_tools() {
+    heading "Contribution surface"
+    python3 -c "
+import tomllib
+d=tomllib.load(open('$TOOLS','rb'))
+for t in d['tool']:
+    first=t['description'].strip().splitlines()[0]
+    print(f\"  {t['name']:22} {first}\")
+    print(f\"  {'':22} auth: {t['auth']}   rate: {t['rate_limit']}\")
+"
+    echo
+    info "Identical to forge/mcp/tools.toml. The MCP server wraps this file."
+    info "No tool here writes to main. $(python3 -c "
+import tomllib;print(tomllib.load(open('$TOOLS','rb'))['server']['authority']['main_writer'])") is the only writer."
+}
+
+main() {
+    local cmd="${1:-}"; shift || true
+    case "$cmd" in
+        constitution_read)   t_constitution_read "$@" ;;
+        roadmap_read)        t_roadmap_read "$@" ;;
+        ledger_query)        t_ledger_query "$@" ;;
+        tasks_list)          t_tasks_list "$@" ;;
+        tasks_claim)         t_tasks_claim "$@" ;;
+        tasks_release)       t_tasks_release "$@" ;;
+        rfc_submit)          t_rfc_submit "$@" ;;
+        contribution_submit) t_contribution_submit "$@" ;;
+        build_verify)        t_build_verify "$@" ;;
+        contribution_status) t_contribution_status "$@" ;;
+        --list|-l|list)      list_tools ;;
+        --help|-h|"")        sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'; echo; list_tools ;;
+        *)                   die "unknown tool '$cmd' (try --list)" ;;
+    esac
+}
+
+main "$@"

@@ -1,0 +1,97 @@
+# Device profile: critical
+#
+# Budgets are constitutional (invariant 4, frugality_per_profile). They are
+# measured on every contribution and a regression fails the merge gate.
+#
+# This profile additionally carries timing budgets. Those are not performance
+# targets: in a mixed-criticality system a missed deadline in a safety partition
+# is a failure of the same kind as a wrong answer.
+
+[profile]
+id = "critical"
+title = "Critical"
+devices = ["cars", "industrial controllers", "medical devices", "avionics"]
+target = "aarch64-unknown-none-softfloat"
+
+description = """
+Machines where software failure injures people.
+
+This profile is the reason the scheduler is designed the way it is, from M2 rather
+than later. A car runs a braking controller and an agent in the same box. Those
+two things must not be able to interfere with each other, and the guarantee cannot
+be "we gave the important one a higher priority" — priority is a heuristic, and a
+heuristic is not a guarantee.
+
+What is required instead is temporal partitioning: the safety partition receives
+its budget within its period whatever else the machine is doing, enforced by the
+kernel, unreachable by any agent regardless of the capabilities it holds or the
+budget it was granted. An agent that consumes its entire allocation, spins, or
+misbehaves outright changes nothing about whether the brakes respond.
+
+Capability microkernels already carry this load in automotive and avionics. The
+architecture is not a bet here; it is the established answer.
+"""
+
+[profile.system]
+mmu_required = true
+smp = true
+persistent_storage = "required"
+agent_runtime = "partitioned"
+temporal_partitioning = "required"
+deterministic_scheduling = "required"
+
+[profile.certification]
+# Not claimed. Recorded so the design does not foreclose it.
+target_standards = ["ISO 26262", "IEC 61508"]
+status = "not-claimed"
+note = """
+No certification is claimed and none is imminent — certification is a multi-year
+process requiring evidence this project does not yet have. What is required now is
+narrower and entirely achievable: do not make architectural choices that make it
+impossible later. A kernel small enough to be audited exhaustively, with no
+external dependencies and no dynamic allocation on the safety path, keeps the door
+open. Discovering the door is shut is a decade-scale mistake.
+"""
+
+[budget.kernel_image]
+max_bytes = 262144               # 256 KiB
+enforced_from = "M0"
+measure = "size of the linked kernel binary, release build, stripped"
+rationale = """
+Deliberately tighter than standard despite comparable hardware. Every kilobyte
+here is a kilobyte that must be argued for in a certification dossier and read by
+a human assessor. Small is a safety property.
+"""
+
+[budget.boot_memory]
+max_bytes = 8388608              # 8 MiB
+enforced_from = "M1"
+measure = "physical memory owned by the kernel once boot completes"
+rationale = "Statically bounded; no dynamic allocation is permitted on the safety path."
+
+[budget.boot_duration]
+max_ms = 2000
+enforced_from = "M2"
+measure = "reset vector to safety partition running, measured on the reference platform"
+rationale = """
+Bounded by regulation rather than taste: rear visibility requirements oblige a
+vehicle to display a reversing image within two seconds of ignition. The safety
+partition must be live before that, so this is a real deadline with a real
+consequence, not an engineering preference.
+"""
+
+[budget.interrupt_latency]
+max_us = 50
+enforced_from = "M2"
+measure = "worst observed interrupt entry latency under full agent-partition load"
+rationale = "Worst case, not average. An average latency figure says nothing about a deadline."
+
+[budget.partition_jitter]
+max_us = 100
+enforced_from = "M2"
+measure = "worst deviation from a safety partition's scheduled activation instant"
+rationale = """
+The guarantee that matters: a safety partition activates when it was promised,
+regardless of what any other partition is doing. Measured under adversarial load
+from an agent partition, because that is the case the design exists for.
+"""

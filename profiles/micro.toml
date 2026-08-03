@@ -1,0 +1,48 @@
+# Device profile: micro
+#
+# Budgets are constitutional (invariant 4, frugality_per_profile). They are
+# measured on every contribution and a regression fails the merge gate.
+
+[profile]
+id = "micro"
+title = "Micro"
+devices = ["glasses", "earbuds", "cameras", "home sensors", "industrial IoT"]
+target = "aarch64-unknown-none-softfloat"
+
+description = """
+Devices worn on the face or placed in a room: enough resources for a small local
+model, and a sensor suite that sees and hears things their wearer did not
+consciously decide to record.
+
+This is the profile where user sovereignty stops being abstract. A pair of glasses
+that can capture what is in front of it, held by an agent that reasons about what
+it captured, is exactly the arrangement in which "see, revoke, refuse" has to be
+enforced by the kernel rather than promised in a settings screen — including
+against the manufacturer.
+"""
+
+[profile.system]
+ram_min_bytes = 8388608          # 8 MiB
+ram_max_bytes = 268435456        # 256 MiB
+mmu_required = true
+smp = "optional"
+persistent_storage = "required"
+agent_runtime = "local-lightweight"
+
+[budget.kernel_image]
+max_bytes = 262144               # 256 KiB
+enforced_from = "M0"
+measure = "size of the linked kernel binary, release build, stripped"
+rationale = "Room for a fuller driver capability set than nano, still nowhere near a monolith."
+
+[budget.boot_memory]
+max_bytes = 4194304              # 4 MiB
+enforced_from = "M1"
+measure = "physical memory owned by the kernel once boot completes"
+rationale = "At the low end of this profile that is half the machine; the ceiling has to bite."
+
+[budget.boot_duration]
+max_ms = 500
+enforced_from = "M2"
+measure = "reset vector to init handoff, measured on the reference platform"
+rationale = "Wearables are woken constantly and briefly. Boot cost is paid many times a day."

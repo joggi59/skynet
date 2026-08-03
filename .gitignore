@@ -1,0 +1,27 @@
+# Build output
+/kernel/target/
+/target/
+**/*.rs.bk
+
+# CI scratch — never committed; evidence lives in .provenance/ instead
+/ci/.work/
+/ci/.out/
+
+# Forge scratch — in-flight contribution records and isolated worktrees.
+# The permanent record of a contribution is its ledger line, not this directory.
+/forge/.work/
+/.forge/
+/.worktrees/
+
+# Quarantine — untrusted submissions from the outside world.
+# These MUST NOT be committed: they reach main only through ci/gate.sh.
+/quarantine/
+
+# Website build output (sources are tracked, the render is not)
+/web/dist/
+/web/node_modules/
+
+# Editor and OS noise
+*.swp
+*~
+.DS_Store

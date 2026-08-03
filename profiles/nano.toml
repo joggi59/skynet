@@ -1,0 +1,57 @@
+# Device profile: nano
+#
+# Budgets are constitutional (invariant 4, frugality_per_profile). They are
+# measured on every contribution and a regression fails the merge gate.
+#
+# Budgets whose enforced_from milestone has not been reached report "pending".
+# Pending is never reported as pass.
+
+[profile]
+id = "nano"
+title = "Nano"
+devices = ["watches", "sensors", "tags", "medical wearables"]
+target = "aarch64-unknown-none-softfloat"
+
+description = """
+The smallest thing this system is meant to inhabit. A watch has no room for a
+desktop, no room for a local model, and frequently no room for a second copy of
+anything.
+
+At this size the agent runtime is largely remote: the device holds capabilities,
+budgets and its own ledger, and reasons elsewhere. That is a constraint, not a
+compromise — it means the parts that must be unforgeable stay local, on hardware
+the wearer physically holds, while the parts that merely need to be clever do not.
+
+This profile is why invariant 4 exists. A system that cannot fit here cannot run
+here, and every promise this project makes about reach is measured against this
+number.
+"""
+
+[profile.system]
+ram_max_bytes = 8388608          # 8 MiB — the ceiling this profile targets
+mmu_required = true
+smp = false
+persistent_storage = "optional"
+agent_runtime = "remote"
+
+[budget.kernel_image]
+max_bytes = 196608               # 192 KiB
+enforced_from = "M0"
+measure = "size of the linked kernel binary, release build, stripped"
+rationale = """
+A microkernel this size is not unusual — seL4 is roughly ten thousand lines. The
+ceiling is set where a competent implementation lands, not where a comfortable
+one does, because comfort here costs reach.
+"""
+
+[budget.boot_memory]
+max_bytes = 1048576              # 1 MiB
+enforced_from = "M1"
+measure = "physical memory owned by the kernel once boot completes"
+rationale = "One eighth of the profile ceiling. The rest belongs to the wearer."
+
+[budget.boot_duration]
+max_ms = 250
+enforced_from = "M2"
+measure = "reset vector to init handoff, measured on the reference platform"
+rationale = "A watch that takes longer than this to wake reads as broken."

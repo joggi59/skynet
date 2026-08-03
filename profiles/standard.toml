@@ -1,0 +1,58 @@
+# Device profile: standard
+#
+# Budgets are constitutional (invariant 4, frugality_per_profile). They are
+# measured on every contribution and a regression fails the merge gate.
+#
+# This is the reference profile: unless a task states otherwise, CI builds and
+# boots against this one.
+
+[profile]
+id = "standard"
+title = "Standard"
+devices = ["phones", "tablets", "laptops", "desktops", "single-board computers", "servers"]
+target = "aarch64-unknown-none-softfloat"
+reference = true
+
+description = """
+The profile with room for everything: a full local agent runtime, a rich presence
+layer, real storage, real networking.
+
+It is also the profile where frugality is easiest to abandon and most worth
+keeping. There is no technical reason a general-purpose machine needs a kernel an
+order of magnitude larger than a watch's — the services differ, the kernel does
+not. Letting the ceiling drift up here because the hardware can absorb it is how
+systems become unable to go anywhere else, one reasonable decision at a time.
+
+A ten-year-old phone is a perfectly good computer. Whether it remains one is a
+software decision, and it gets made here.
+"""
+
+[profile.system]
+ram_min_bytes = 1073741824       # 1 GiB
+mmu_required = true
+smp = true
+persistent_storage = "required"
+agent_runtime = "local-full"
+presence_layer = "rich"
+
+[budget.kernel_image]
+max_bytes = 393216               # 384 KiB
+enforced_from = "M0"
+measure = "size of the linked kernel binary, release build, stripped"
+rationale = """
+Larger than nano because SMP, a fuller interrupt path and more capability object
+types are compiled in — not because the machine has room. The kernel is the same
+kernel everywhere; only the services differ.
+"""
+
+[budget.boot_memory]
+max_bytes = 16777216             # 16 MiB
+enforced_from = "M1"
+measure = "physical memory owned by the kernel once boot completes"
+rationale = "Under two percent of the profile floor. The machine belongs to its owner."
+
+[budget.boot_duration]
+max_ms = 1500
+enforced_from = "M2"
+measure = "reset vector to init handoff, measured on the reference platform"
+rationale = "Generous by embedded standards, unremarkable by desktop ones."

@@ -1,0 +1,98 @@
+# Roadmap objective 0001
+#
+# Objectives express a common good to be served, not a task to be done. Tasks are
+# derived from them (see tasks/), and the Guardian rules on whether a contribution
+# genuinely serves the objective it claims.
+#
+# Weights come from the human vote (see governance/VOTING.md). Until the vote
+# opens at milestone G3, weights are seeded by the BDFL and marked as such, so
+# that no line in the ledger ever misrepresents where its mandate came from.
+
+[objective]
+id = "0001"
+title = "Sovereign foundations"
+status = "active"
+opened = "2026-08-03"
+author = "johan"
+author_kind = "human"
+
+statement = """
+Establish a system that boots, and a forge that builds it — such that from the
+very first line, every guarantee this project intends to make later is already
+possible, and every line already carries the record of where it came from.
+"""
+
+common_good = """
+This objective serves the common good indirectly but decisively: it is the
+groundwork that makes every later guarantee achievable rather than aspirational.
+
+Three properties are almost impossible to retrofit into an operating system, and
+each of them is a load-bearing part of what this project promises:
+
+  Capability discipline. A system that grants ambient authority anywhere cannot
+  be made to stop later. Every retrofit leaves a path. The address space, the
+  scheduler and the object model have to be built without ambient authority from
+  the first commit, or user sovereignty is never real.
+
+  Provenance. A ledger started on commit five thousand is a ledger with five
+  thousand unexplained lines at its root. Traceability is only meaningful if it
+  reaches all the way down.
+
+  Portability discipline. The HAL boundary either holds from the beginning or has
+  already quietly leaked by the time anyone attempts a second architecture. A
+  system meant for watches, glasses, phones, computers and cars cannot discover
+  its portability late.
+
+None of this is visible to a user. All of it determines whether the visible
+promises can be kept.
+"""
+
+# Weight on a 0..100 scale, normalised across active objectives.
+weight = 100
+weight_source = "bdfl-seed"
+weight_note = """
+Sole active objective; the entire mandate rests here until further objectives
+open. Reseeded by ordinary vote once cycle 0001 runs at milestone G3, at which
+point weight_source becomes "vote:cycle-0001".
+"""
+
+[objective.success]
+# What must be true for this objective to be considered served.
+criteria = [
+    "The kernel boots on aarch64 under QEMU, prints its marker, and shuts down cleanly through PSCI",
+    "The build uses stable Rust with no external dependencies in the kernel",
+    "No architecture-specific construct exists outside kernel/src/arch/",
+    "The merge gate runs all ten conditions and is the only writer of main",
+    "The provenance ledger records the first kernel commit end to end: objective, agent, model, reviewers, Guardian verdict, CI evidence",
+    "The MCP contribution surface is defined, and the local forge scripts implement exactly it",
+]
+
+[objective.non_goals]
+# Stated explicitly so contributions that overreach can be judged, not argued about.
+excluded = [
+    "User space, processes, or any execution below EL1 — that is objective territory for M3",
+    "Device drivers beyond the boot console",
+    "A filesystem, a network stack, or persistence of any kind",
+    "Any human-facing interface; the presence layer is M8",
+    "Real hardware bring-up; QEMU virt is sufficient and correct for this objective",
+    "Performance work of any kind",
+]
+
+[objective.milestones]
+kernel = ["M0"]
+governance = ["G0"]
+
+[objective.rationale_for_ordering]
+note = """
+The forge is built before the kernel it builds, and then the forge produces the
+kernel's first commit rather than a human writing it.
+
+The alternative — write M0 by hand, add the forge afterwards — is faster by a few
+days and permanently weaker: the foundations would not be agent-authored, and the
+project's central claim would carry an asterisk at its root that no later work
+could remove.
+
+Building the forge first and in the abstract is the other failure mode: a factory
+designed against imagined problems rather than real ones. Hence a thin slice of
+both, with the forge proving itself on real code within its first week.
+"""

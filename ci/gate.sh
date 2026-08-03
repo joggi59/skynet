@@ -246,80 +246,72 @@ do_merge() {
     evidence_digest=$(find "$C_DIR" -type f -print0 2>/dev/null \
         | sort -z | xargs -0 cat 2>/dev/null | sha256sum | cut -d' ' -f1)
 
-    local reviewers guardians
-    # Findings are recorded, not only reasoning.
-    #
-    # The ledger previously kept the prose and discarded the findings array. For
-    # invariants that are not yet mechanically enforced — capability confinement
-    # until M4, user sovereignty until M5 — the reviewers ARE the enforcement,
-    # and their findings are the only record that anyone examined the question.
-    # Dropping them meant every such judgement between G0 and M4 was thrown away
-    # at the moment it became permanent. Found by reviewer-constitution on the
-    # first contribution, which had to write its whole argument into the prose
-    # field to survive.
-    reviewers=$(python3 -c "
-import json,glob,os
-out=[]
-for f in sorted(glob.glob('$C_DIR/verdicts/reviewer-*.json')):
-    d=json.load(open(f))
-    out.append({'role':d['role'],'verdict':d['verdict'],
-                'confidence':d.get('confidence'),
-                'findings':d.get('findings',[]),
-                'reasoning':d.get('reasoning','')})
-print(json.dumps(out))")
-    guardians=$(python3 -c "
-import json,glob
-out=[]
-for f in sorted(glob.glob('$C_DIR/verdicts/guardian-*.json')):
-    d=json.load(open(f))
-    out.append({'verdict':d['verdict'],'confidence':d.get('confidence'),
-                'serves_common_good':d.get('serves_common_good'),
-                'within_non_goals':d.get('within_non_goals'),
-                'findings':d.get('findings',[]),
-                'reasoning':d.get('reasoning','')})
-print(json.dumps(out))")
-
-    local objfile weight wsrc
+    local objfile weight wsrc cver
     objfile=$(ls "$REPO_ROOT/roadmap/${C_OBJECTIVE}-"*.toml 2>/dev/null | head -1)
     weight=$(toml_get "$objfile" "d['objective']['weight']")
     wsrc=$(toml_get   "$objfile" "d['objective']['weight_source']")
+    cver=$(toml_get   "$CONST"   "d['meta']['version']")
 
+    # Refuse to run against a branch already contained in main. `git merge
+    # --no-ff` answers "Already up to date" and creates nothing, so the ledger
+    # would record the pre-merge commit and claim it was the merge.
+    if git merge-base --is-ancestor "$C_BRANCH" HEAD 2>/dev/null; then
+        fail "$C_BRANCH is already contained in main — nothing to merge"
+        detail "a ledger line here would name a commit that is not the merge"
+        return 1
+    fi
+
+    # ---- 1. Build the ledger entry BEFORE touching main -------------------
+    #
+    # Ordering is correctness, not preference. Merging first and writing
+    # provenance second leaves main carrying a commit with no ledger line
+    # whenever anything in between fails — exactly what invariant 3 forbids, and
+    # exactly what happened the first time this ran for real.
+    local entry="$C_DIR/ledger-entry.json" perr="$C_DIR/ledger-error.txt"
+    if ! python3 "$REPO_ROOT/ci/ledger-entry.py" \
+            "$C_DIR" "$C_ID" "$C_TASK" "$C_RFC" "$C_OBJECTIVE" "$weight" \
+            "$wsrc" "$C_AGENT" "$C_MODEL" "$C_PROMPT_HASH" \
+            "$evidence_digest" "$cver" "$entry" 2>"$perr"; then
+        fail "could not build the ledger entry — nothing was merged"
+        sed 's/^/           /' "$perr" | tail -5
+        return 1
+    fi
+
+    # ---- 2. Merge --------------------------------------------------------
+    local before; before=$(git rev-parse HEAD)
     info "merging $C_BRANCH into main ..."
     if ! git merge --no-ff --no-edit -m "$C_TASK: merged by gate (contribution $C_ID)" "$C_BRANCH" >/dev/null 2>&1; then
         git merge --abort >/dev/null 2>&1 || true
         fail "merge failed — conflict or dirty tree"
         return 1
     fi
+    local merged; merged=$(git rev-parse HEAD)
+    if [ "$merged" = "$before" ]; then
+        fail "the merge produced no commit — refusing to record one"
+        return 1
+    fi
 
-    local commit; commit=$(git rev-parse HEAD)
-
+    # ---- 3. Append the ledger, as its own commit --------------------------
+    #
+    # Never --amend. Amending rewrites the merge commit's SHA, and the ledger
+    # line has already recorded the SHA it describes, so the record ends up
+    # naming a commit that no longer exists.
     mkdir -p "$(dirname "$LEDGER")"
-    python3 -c "
-import json,sys,subprocess
-entry = {
-  'contribution_id': '$C_ID',
-  'task':            '$C_TASK',
-  'rfc':             '$C_RFC',
-  'objective':       '$C_OBJECTIVE',
-  'objective_weight': $weight,
-  'weight_source':   '$wsrc',
-  'agent':           '$C_AGENT',
-  'model':           '$C_MODEL',
-  'prompt_hash':     '$C_PROMPT_HASH',
-  'reviewer_verdicts': json.loads('''$reviewers'''),
-  'guardian_verdicts': json.loads('''$guardians'''),
-  'evidence_digest': 'sha256:$evidence_digest',
-  'constitution_version': $(toml_get "$CONST" "d['meta']['version']"),
-  'commit':          '$commit',
-  'merged_at':       subprocess.run(['git','log','-1','--format=%cI'],capture_output=True,text=True).stdout.strip(),
-}
-with open('$LEDGER','a') as f:
-    f.write(json.dumps(entry, sort_keys=True) + '\n')
-" || { fail "could not append to the ledger"; return 1; }
+    if ! python3 "$REPO_ROOT/ci/ledger-append.py" "$entry" "$LEDGER" 2>"$perr"; then
+        fail "could not append to the ledger — undoing the merge"
+        sed 's/^/           /' "$perr" | tail -5
+        git reset --hard "$before" >/dev/null 2>&1
+        detail "main must never carry a commit without a provenance line"
+        return 1
+    fi
 
     git add "$LEDGER"
-    git commit -q --amend --no-edit
-    pass "merged as $(git rev-parse --short HEAD), ledger appended"
+    if ! git commit -q -m "ledger: record $C_ID ($C_TASK)"; then
+        git reset --hard "$before" >/dev/null 2>&1
+        fail "could not commit the ledger — the merge was undone"
+        return 1
+    fi
+    pass "merged as $(git rev-parse --short "$merged"), ledger appended as $(git rev-parse --short HEAD)"
 }
 
 # ---------------------------------------------------------------------------

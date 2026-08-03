@@ -43,10 +43,15 @@ static IN_FAILURE: AtomicBool = AtomicBool::new(false);
 
 /// The platform's fail-stop.
 ///
-/// The single place in the kernel where authority is created outside the boot
-/// path, bounded deliberately: one function, one caller, one compile-time
-/// constant written, never returns, not a [`hal::Console`], and unusable for
-/// ordinary output.
+/// The single MODULE in the kernel where authority is created outside the boot
+/// path. Two functions now: [`hal::FailStop::fail_stop`] for panics, which
+/// writes a compile-time constant, and [`Failure::fault_stop`] for hardware
+/// faults, which writes register values.
+///
+/// Both are `pub(super)` or narrower, both are behind the same re-entrancy
+/// guard, and neither returns. The earlier wording — "one function, one caller,
+/// one compile-time constant" — was written when there was one, and was still
+/// there when there were two.
 ///
 /// What would turn it into a global console — and must not be allowed to:
 /// returning instead of diverging, gaining a receiver, acquiring a second call
@@ -56,17 +61,28 @@ pub struct Failure;
 
 impl hal::FailStop for Failure {
     unsafe fn fail_stop(bytes: &'static [u8]) -> ! {
-        // Relaxed is sufficient: M0 is single-core and has no interrupts, so
-        // there is no other observer to order against. It is an atomic rather
-        // than a `static mut` because that is the shape this needs when SMP
-        // arrives at M2, and because `static mut` would require `unsafe` to
-        // read for no benefit.
-        if IN_FAILURE.swap(true, Ordering::Relaxed) {
+        // A load and a store, NOT `swap`.
+        //
+        // `swap` compiles to `ldxrb`/`stxrb` — an exclusive-monitor pair. The
+        // MMU is off, so this memory is Device-nGnRnE, and the architecture does
+        // not guarantee exclusive monitors work on Device memory. A `stxrb` that
+        // never succeeds is an infinite retry loop in the first four
+        // instructions of the handler whose entire purpose is to stop an
+        // infinite loop. Found at machine level by reviewer-safety.
+        //
+        // Load-then-store is not atomic, and does not need to be here: M1 is
+        // single-core with no interrupts enabled, so no second observer exists
+        // to race with. That argument expires the moment either changes, and it
+        // expires in the safe direction — `swap` becomes correct once the MMU is
+        // on and this memory is Normal, which is the same milestone that brings
+        // the second core.
+        if IN_FAILURE.load(Ordering::Relaxed) {
             // Already failing. Do not touch the console: the previous entry may
             // have been interrupted mid-write, and whatever panicked will panic
             // again if asked to do the same work. Stop here.
             Processor::halt()
         }
+        IN_FAILURE.store(true, Ordering::Relaxed);
 
         // SAFETY: the kernel has already failed and this function never returns,
         // so no other owner of the PL011 or of PSCI will run again and the
@@ -108,12 +124,22 @@ impl Failure {
     /// Callable only from an exception vector. Aliases a console owned
     /// elsewhere, sound only because the kernel has already failed and no other
     /// code will run again.
-    pub unsafe fn fault_stop(slot: Option<Slot>, esr: u64, far: u64, elr: u64) -> ! {
-        if IN_FAILURE.swap(true, Ordering::Relaxed) {
+    /// `pub(super)`, not `pub`. Two judges compiled the counter-example against
+    /// the previous revision: `Failure` is re-exported at crate scope, `Slot`
+    /// being private does not help because `None` needs no name, and portable
+    /// code could therefore put 160 bits of its own choosing on the operator's
+    /// console and power the machine off — with the HAL check passing.
+    ///
+    /// The same idiom two files away, for the same reason, from the review
+    /// cycle before this one. It was applied to the constructors and not to
+    /// this function.
+    pub(super) unsafe fn fault_stop(slot: Option<Slot>, esr: u64, far: u64, elr: u64) -> ! {
+        if IN_FAILURE.load(Ordering::Relaxed) {
             // Already failing. A fault inside the failure path lands here and
             // stops, instead of vectoring again into the same code.
             Processor::halt()
         }
+        IN_FAILURE.store(true, Ordering::Relaxed);
 
         // SAFETY: as for `fail_stop` — the kernel has failed, this never
         // returns, and the guard above makes the "at most once" clause true of

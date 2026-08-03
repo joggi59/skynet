@@ -138,7 +138,6 @@ pub fn elr_is_indicative_only(esr: u64) -> bool {
 /// stack. Does not return: nothing at M1 is resumable — there is no scheduler to
 /// reschedule onto, no page table to repair and no process to kill, so a fault
 /// is a kernel bug and the honest response is to say what happened and stop.
-#[unsafe(no_mangle)]
 unsafe extern "C" fn exception_entry(index: u64) -> ! {
     let esr: u64;
     let far: u64;
@@ -162,7 +161,14 @@ unsafe extern "C" fn exception_entry(index: u64) -> ! {
 ///
 /// Sixteen entries of 128 bytes, 2 KiB aligned. Both are architectural
 /// requirements: `VBAR_EL1`'s low eleven bits are RES0, so a misaligned write
-/// silently lands somewhere else.
+/// silently lands somewhere else — no link error, no warning, no fault.
+///
+/// The 2 KiB alignment is enforced by the LINKER, in `link.ld`'s dedicated
+/// `.vectors` output section, not by an `.align` directive inside this function.
+/// An earlier revision relied on the directive, which aligns the table but not
+/// the symbol `VBAR_EL1` is loaded from; deleting it linked cleanly with the
+/// table where the hardware would read it as the middle of `_start`.
+/// `ci/constitution-check.sh --check vector-alignment` now measures the result.
 ///
 /// Each entry saves the registers it is about to clobber, loads its own index,
 /// and branches to the shared handler. Entries are kept to a handful of
@@ -175,9 +181,8 @@ unsafe extern "C" fn exception_entry(index: u64) -> ! {
 /// Not callable. This is a table of exception entry points, reached only by the
 /// processor taking an exception.
 #[unsafe(naked)]
-#[unsafe(no_mangle)]
-#[unsafe(link_section = ".text.vectors")]
-pub unsafe extern "C" fn vector_table() -> ! {
+#[unsafe(link_section = ".vectors")]
+pub(super) unsafe extern "C" fn vector_table() -> ! {
     naked_asm!(
         // Each entry: make room for x0-x30, save the two registers the entry
         // itself uses, save the rest, load the slot index, branch.
@@ -204,11 +209,9 @@ pub unsafe extern "C" fn vector_table() -> ! {
         "  stp  x28, x29, [sp, #16 * 14]",
         "  str  x30,      [sp, #16 * 15]",
         "  mov  x0, #\\idx",
-        "  b    exception_entry",
+        "  b    {handler}",
         ".endm",
 
-        ".align 11",
-        "__vectors:",
         // Current EL with SP_EL0 — unreachable: the kernel runs at EL1h.
         ".align 7", "ENTRY 0",
         ".align 7", "ENTRY 1",
@@ -229,5 +232,7 @@ pub unsafe extern "C" fn vector_table() -> ! {
         ".align 7", "ENTRY 13",
         ".align 7", "ENTRY 14",
         ".align 7", "ENTRY 15",
+
+        handler = sym exception_entry,
     )
 }

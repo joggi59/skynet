@@ -24,6 +24,21 @@ SECTIONS
         KEEP(*(.text.boot))
         *(.text .text.*)
     }
+
+    /* The vector table, aligned by the linker rather than by an assembler
+     * directive inside a function. VBAR_EL1's low 11 bits are RES0: a table that
+     * is not 2 KiB aligned produces no link error, no warning and no fault — the
+     * processor truncates the address and vectors somewhere else.
+     *
+     * KEEP because nothing in the object graph roots it: it is reached only by
+     * the processor taking an exception, so --gc-sections would remove it.
+     *
+     * Named `.vectors`, not `.text.vectors`: output sections claim input
+     * sections in script order, and `.text`'s `*(.text .text.*)` wildcard above
+     * matches `.text.vectors` and swallows it before this section is reached.
+     * The result linked cleanly, produced no `.vectors` section at all, and was
+     * aligned only by an assembler directive inside the function. */
+    .vectors ALIGN(2048) : { KEEP(*(.vectors)) }
     .rodata : ALIGN(8) { *(.rodata .rodata.*) }
     .got    : ALIGN(8) { *(.got) *(.got.plt) }
     .data   : ALIGN(8) { *(.data .data.*) }

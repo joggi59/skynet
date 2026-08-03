@@ -24,9 +24,10 @@ written — a bad page table entry is a data abort, and a data abort today is an
 loop. Debugging the rest of M1 without this is possible in the way that debugging without a compiler
 error message is possible.
 
-This is also the first milestone that makes the machine do something rather than describe itself.
-`guardian-2` flagged, correctly, that M0's last two contributions were both about the project's own
-claims, and that a third would read as drift toward process over product. This is product.
+A Guardian ruling on the previous contribution observed that M0's last two contributions were both
+about the project's own claims, and that a third would read as drift toward process over product.
+Whether this work answers that signal is for a panel to decide, not for this document to assert.
+Recorded here so the question is in front of them.
 
 ## Design
 
@@ -110,11 +111,15 @@ runtime data, deliberately, and that is the point of it.
 So: a sixteen-byte lookup table and a shift loop, in `arch/aarch64/hex.rs`, emitting fixed-width
 values. Forty lines, no dependency, no allocation, and nothing that can itself fault.
 
-The distinction worth stating, because `reviewer-constitution` will look for it: `fail_stop` writes a
-compile-time constant because a *panic message* is program text that could contain anything a future
-author puts in it. A fault report writes register values, which are facts about the machine, chosen
-by this design and not by a caller. Different data, different argument, and the second does not
-license the first.
+The distinction worth stating: `fail_stop` writes a compile-time constant because a *panic message*
+is program text that could contain anything a future author puts in it. A fault report writes
+register values, which are facts about the machine.
+
+**Corrected after review.** An earlier revision said those values are "chosen by this design and not
+by a caller". They are parameters. Whether a caller can choose them is a question about who can call
+the function, not about what the function does with what it receives — and with `fault_stop` public,
+a caller could choose all of them. `pub(super)` is what makes the sentence true; the sentence was
+doing work the visibility had not yet done.
 
 ### 5. Where the authority comes from
 
@@ -122,7 +127,20 @@ The handler needs a console. `fail.rs` already owns the one place outside the bo
 devices, with the re-entrancy guard C-0003 added.
 
 **The fault path goes through it.** `Failure` gains `fault_stop`, in the same module, behind the same
-`IN_FAILURE` guard, minting through the same call. It is not a new minting site.
+`IN_FAILURE` guard. It is not a new minting *module*.
+
+**Correction, after review.** An earlier revision claimed more: that this "does not weaken" the
+reachability finding. Two judges compiled the counter-example. `fault_stop` was `pub` on a type
+re-exported at crate scope, and `Slot` being private does not help because `None` needs no name — so
+portable code could call it, put 160 bits of caller-chosen data on the operator's console, and power
+the machine off, with the HAL check passing. The hole did not close; it widened, because
+`fail_stop`'s `'static` bound had reduced portable-reachable output to zero bits of runtime state and
+this restored it.
+
+The RFC answered *which module holds the constructor call* — true, and `exception.rs` mints nothing —
+and presented that as an answer to a question about *reachability*. It was not. `fault_stop` is
+`pub(super)`, the idiom already used two files away, and the claim narrows to what visibility
+actually delivers.
 
 This matters more than it looks. `reviewer-constitution` found that C-0003 closed the constructor
 reach-around and left `Failure::fail_stop` reachable from portable code — the hole moved rather than

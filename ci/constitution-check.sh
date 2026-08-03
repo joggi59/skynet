@@ -132,6 +132,51 @@ print(' '.join(names))
 }
 
 # ---------------------------------------------------------------------------
+# Architectural preconditions the linker will not enforce.
+#
+# Not a constitutional invariant — a class of defect that links silently and
+# fails catastrophically at runtime. reviewer-safety asked for this by name after
+# C-0004: "the two .align directives are the only thing between this table and
+# silently vectoring into _start, and nothing in the repository checks either."
+#
+# VBAR_EL1's low eleven bits are RES0. A vector table that is not 2 KiB aligned
+# does not fail to link, does not warn, and does not fault — the processor simply
+# truncates the address and vectors somewhere else, which on this image is the
+# middle of _start.
+# ---------------------------------------------------------------------------
+check_vector_alignment() {
+    heading "Vector table alignment"
+    if ! kernel_exists; then
+        pending "no kernel yet"
+        return
+    fi
+    local bin; bin="$(kernel_binary)"
+    if [ ! -f "$bin" ]; then
+        pending "kernel not built — run ci/build.sh first"
+        return
+    fi
+    if ! command -v nm >/dev/null 2>&1; then
+        pending "nm not available"
+        return
+    fi
+
+    local addr
+    addr=$(nm "$bin" 2>/dev/null | grep -wE 'vector_table|__vectors' | head -1 | awk '{print $1}')
+    if [ -z "$addr" ]; then
+        skip "no vector table symbol in the image yet"
+        return
+    fi
+
+    if python3 -c "import sys; sys.exit(0 if int('$addr',16) % 2048 == 0 else 1)"; then
+        pass "vector table at 0x$addr is 2 KiB aligned"
+    else
+        fail "vector table at 0x$addr is NOT 2 KiB aligned"
+        detail "VBAR_EL1's low 11 bits are RES0 — the processor will truncate this"
+        detail "address and vector somewhere else, silently, with no fault and no warning"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Invariant 3 — total provenance
 # The ledger must be well-formed and append-only.
 # ---------------------------------------------------------------------------
@@ -309,6 +354,7 @@ for i in d['invariant']:
 run_all() {
     check_prose_sync
     check_provenance
+    check_vector_alignment
     check_hal_boundary
     check_no_kernel_deps
     check_english
@@ -337,6 +383,7 @@ main() {
                 hal-boundary)    check_hal_boundary ;;
                 no-kernel-deps)  check_no_kernel_deps ;;
                 english)         check_english ;;
+                vector-alignment) check_vector_alignment ;;
                 zero-telemetry)  check_pending_invariant "zero_telemetry" 5 "M6" \
                                      "no outbound path can be verified absent before a network stack exists" ;;
                 electorate)      check_pending_invariant "agents_do_not_vote" 9 "G3" \

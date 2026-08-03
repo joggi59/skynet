@@ -47,26 +47,47 @@ load_contribution() {
     C_BRANCH=$(toml_get    "$dir/contribution.toml" "d['contribution']['branch']")
     C_PROMPT_HASH=$(toml_get "$dir/contribution.toml" "d['contribution'].get('prompt_hash','')")
     C_SIGNATURE=$(toml_get "$dir/contribution.toml" "d['contribution'].get('signature','')")
+
+    # Where the mechanical conditions must run.
+    #
+    # The gate judges the CONTRIBUTION, not the branch it would merge into.
+    # Running the checks in the repository root evaluates main, where the
+    # contribution's code does not exist — every condition then reports PENDING
+    # and the gate refuses for a reason that has nothing to do with the patch.
+    #
+    # The checks run in the contribution's worktree, which carries its code and
+    # its own copy of ci/ merged up to date. The worktree's ci/ is used
+    # deliberately: a contribution must be judged by the checks as they will
+    # exist after it lands, not by whatever the root happens to have.
+    C_WORKTREE=$(git worktree list --porcelain 2>/dev/null \
+        | awk -v b="refs/heads/$C_BRANCH" '
+            /^worktree /  { wt = $2 }
+            /^branch /    { if ($2 == b) { print wt; exit } }')
+    if [ -z "${C_WORKTREE:-}" ]; then
+        C_WORKTREE="$REPO_ROOT"
+    fi
 }
 
 # ---------------------------------------------------------------------------
 # Conditions 1-4: mechanical. Delegated to the scripts that own them.
 # ---------------------------------------------------------------------------
 
-cond_build()  { heading "1. Build";       _absorb "$REPO_ROOT/ci/build.sh"; }
-cond_lint()   { heading "2. Lint";        _absorb "$REPO_ROOT/ci/build.sh" --lint; }
-cond_tests()  { heading "3. Unit tests";  _absorb "$REPO_ROOT/ci/build.sh" --test; }
-cond_boot()   { heading "4. Boot";        _absorb "$REPO_ROOT/ci/boot-test.sh"; }
-cond_budgets(){ heading "5. Budgets";     _absorb "$REPO_ROOT/ci/build.sh" --size; }
-cond_hal()    { heading "6. HAL boundary";_absorb "$REPO_ROOT/ci/constitution-check.sh" --check hal-boundary; }
-cond_deps()   { heading "7. Dependencies";_absorb "$REPO_ROOT/ci/constitution-check.sh" --check no-kernel-deps; }
+cond_build()  { heading "1. Build";       _absorb ci/build.sh; }
+cond_lint()   { heading "2. Lint";        _absorb ci/build.sh --lint; }
+cond_tests()  { heading "3. Unit tests";  _absorb ci/build.sh --test; }
+cond_boot()   { heading "4. Boot";        _absorb ci/boot-test.sh; }
+cond_budgets(){ heading "5. Budgets";     _absorb ci/build.sh --size; }
+cond_hal()    { heading "6. HAL boundary";_absorb ci/constitution-check.sh --check hal-boundary; }
+cond_deps()   { heading "7. Dependencies";_absorb ci/constitution-check.sh --check no-kernel-deps; }
 
-# Run a sub-check, echo its per-check lines, and fold its tallies into ours.
-# The sub-scripts already speak PASS/FAIL/PENDING; we count what they printed
-# rather than re-deriving it, so there is exactly one place each condition is
-# decided.
+# Run a sub-check in the contribution's worktree, echo its per-check lines, and
+# fold its tallies into ours. The sub-scripts already speak PASS/FAIL/PENDING;
+# we count what they printed rather than re-deriving it, so there is exactly one
+# place each condition is decided.
 _absorb() {
-    local out; out="$("$@" 2>&1)"
+    local script="$1"; shift
+    local wt="${C_WORKTREE:-$REPO_ROOT}"
+    local out; out="$(cd "$wt" && "./$script" "$@" 2>&1)"
     echo "$out" | grep -vE '^─{5,}|^(build|boot|check|constitution):' | sed '/^$/d' | sed 's/^/  /'
     local p f n
     p=$(echo "$out" | grep -c '^PASS')

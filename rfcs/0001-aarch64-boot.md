@@ -957,7 +957,11 @@ All identifiers, comments and documents in English.
   shape of ambient reach was invented.)
 - C21. `kernel/src/main.rs`, `hal.rs` and `panic.rs` would compile unmodified against a second
   architecture.
-- C22. The panic handler performs no I/O and does not power the machine off.
+- C22. The panic handler ignores `PanicInfo` entirely. It writes the `PANIC_MARKER` constant and
+  nothing else — no message, no location, no formatting, no `core::fmt` anywhere in the image.
+- C23. `BootConsole::new` and `PowerControl::new` have exactly two call sites between them each:
+  `kernel/src/arch/aarch64/boot.rs` and `kernel/src/arch/aarch64/fail.rs`. A third is the failure
+  described in the invariant 1 section, not a style question.
 
 ## Alternatives considered
 
@@ -982,21 +986,35 @@ job is to name three types `arch/mod.rs` already re-exports. Worth revisiting at
 tree introduces a real board-versus-architecture distinction.
 
 **A global console, honestly declared** — a `static` behind an accessor, documented as the kernel's
-one ambient authority, with `print!` on top and `core::fmt::Write` in a portable `console.rs`.
-Tempting because the diagnostic value is immediate: a panic could say what happened, boot could
-narrate itself, and every subsequent milestone would be easier to debug. Rejected because it is the
-single decision most likely to make invariant 1 unreachable, and because "documented as the one
-exception" is how every ambient-authority system begins. The cost of refusing is real and is recorded
-in O-4 rather than hidden.
+one ambient authority, with `print!` on top and `core::fmt::Write` in a portable `console.rs`. This
+is the most tempting alternative in the whole RFC, because the diagnostic value is immediate: the
+panic handler could say what happened, boot could narrate itself, and every subsequent milestone
+would be easier to debug. It is also the obvious way to satisfy the panic-marker contract, and it is
+what most kernels do.
 
-**Panic handler prints a marker and powers off** — attractive because a panic would fail CI in
-milliseconds rather than after a 30-second timeout, and because `ci/boot-test.sh` could then assert
-"boot marker present and panic marker absent", which fails closed in both directions. Rejected on
-authority rather than merit: asserting the panic marker requires editing `ci/boot-test.sh`, which
-neither the architect nor the implementer may touch, and a design whose correctness depends on an
-edit outside its own authority cannot be judged as written. Without that edit the scheme is actively
-harmful — a panic after the marker exits 0 and is scored a pass. If `ci/` is changed by someone who
-may change it, this becomes the better design and should be adopted then.
+Rejected because it is the single decision most likely to make invariant 1 unreachable, and because
+"documented as the one exception" is how every ambient-authority system begins. The narrow `FailStop`
+seam gets the contract satisfied at a fraction of the cost: the panic path can emit its marker, and
+no other code acquires the ability to emit anything. The difference between the two is not the
+panic handler — both work — it is every file written between now and M4.
+
+**A silent panic handler that only halts** — no marker, no console, no shutdown, zero authority of
+any kind, and the smallest possible privileged image. This was this RFC's original position, on the
+grounds that the alternative required a change to `ci/`. That change has since landed: `ci/lib.sh`
+defines `PANIC_MARKER` and `ci/boot-test.sh` requires its absence, so the objection is void.
+
+It is still worth recording why it would be the weaker design even so. A silent halt is *detected*
+by CI — the timeout fires and the run fails — but it is detected thirty seconds later with an empty
+log, on every panic, forever, and it looks identical to a hang in `_start` before the console works.
+The marker converts that into an immediate failure with a legible cause. The authority cost of the
+marker is one bounded function; the cost of silence is paid at every future debugging session.
+
+**Panic handler prints the marker and halts rather than shutting down** — closer to correct hardware
+behaviour, and it keeps power-off as something only a deliberate shutdown does. Rejected because with
+the marker already printed, halting adds a 30-second timeout to every panic and detects nothing extra
+— `ci/boot-test.sh` fails on the marker regardless of exit code. The contract in `ci/lib.sh` says
+"prints PANIC_MARKER and then shuts down", and following it costs nothing that the marker has not
+already bought. It is nonetheless a bring-up behaviour rather than a product behaviour; see O-8.
 
 **Writing the marker with a blind store to `UARTDR`** — three instructions shorter and correct until
 the first output longer than the FIFO. Rejected because the failure mode is silent truncation at an
@@ -1066,15 +1084,20 @@ robustness code in a privileged path worth its bytes? The alternative is to reje
 not EL1, which is smaller and more honest but fails on real hardware that boots at EL2. This RFC
 keeps the drop and flags it; a reviewer may reasonably disagree.
 
-**O-4.** The panic handler is silent, by design and at a real cost, and the same is true of any
-failure between reset and the first UART write — there is no way to report it and it is
-indistinguishable from a hang. An operator, and invariant 2's "see", eventually need to know why a
-kernel stopped. When a diagnostic path is designed it must not be an unrestricted global console. The
-shape this RFC would suggest is a single write-only emergency sink installed once by the boot path,
-explicitly documented as the kernel's one ambient authority, strictly narrower than `Console`, and
-unusable for ordinary output. That deserves its own RFC, and it should happen before the first
-`print!` macro is proposed rather than after. The pre-console case probably needs a watchdog and
-becomes tractable at M2.
+**O-4.** The panic path says *that* the kernel failed and never *why*. `PanicInfo` is deliberately
+discarded, and the marker is identical whatever the cause. That is right for M0 — it keeps
+`core::fmt` out of the image and keeps invariant 5 exactly true — and it will not stay right. Two
+things remain open and neither belongs in M0:
+
+Richer diagnostics need a design rather than a `write!`. Whatever emits a panic message is, by
+construction, a formatter with access to the failing computation's state, on an outward channel. It
+must be bounded the way `FailStop` is bounded: narrow, single-purpose, and unable to become the
+kernel's general console. This should be settled *before* the first `print!` macro is proposed,
+because after that the decision has been made by whoever wrote the macro.
+
+The window between reset and the first UART write remains unreportable. A fault in `_start` produces
+silence indistinguishable from a hang, and no amount of panic-handler design fixes it, because the
+panic handler is not reached. That probably needs a watchdog and becomes tractable at M2.
 
 **O-5.** `ci/build.sh --test` runs `cargo test --manifest-path kernel/Cargo.toml` with no `--target`,
 i.e. for the host, guarded by a grep for `#[cfg(test)]` or `[[test]]` under `kernel/src` and

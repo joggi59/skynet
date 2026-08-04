@@ -18,7 +18,7 @@ objective = "0002"      # Re-filed from 0001. This work satisfies objective 0002
                         # names task files explicitly, and named them before
                         # that note was written. It was an excuse, inside a
                         # record of my own defect, and a judge caught it.
-state = "open"
+state = "done"
 estimated_difficulty = "medium"
 profile = "standard"
 

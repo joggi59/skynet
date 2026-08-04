@@ -2,7 +2,22 @@
 id = "T-0004"
 title = "Install exception vectors and report faults legibly"
 rfc = "0002"
-objective = "0001"
+objective = "0002"      # Re-filed from 0001. This work satisfies objective 0002's
+                        # first success criterion verbatim and none of 0001's
+                        # six; 0002 did not exist when the task was cut, and this
+                        # is the first contribution in the project with two
+                        # objectives to choose between.
+                        #
+                        # The previous wording named which judge had rejected
+                        # which contribution over it. A file every judge reads
+                        # before ruling is not the place for that.
+                        #
+                        # An earlier version of this note added that the rule it
+                        # broke "had been written for commit messages only".
+                        # That is false: governance/SEPARATION_OF_POWERS.md
+                        # names task files explicitly, and named them before
+                        # that note was written. It was an excuse, inside a
+                        # record of my own defect, and a judge caught it.
 state = "open"
 estimated_difficulty = "medium"
 profile = "standard"
@@ -45,6 +60,13 @@ criteria = [
     "the disassembly of _start shows VBAR_EL1 written before the branch into Rust",
     "PROOF: an undefined instruction injected into kernel_main produces SKYNET_FAULT naming cur_spx_sync, EC 0x00, and an ELR matching the injection site, then stops. Run it and show the output; then remove the injection",
     "PROOF: a fault injected inside fault_stop itself halts on the guard. Review measured 10,262,934 exceptions in four seconds without it — show the count is now one report, or none, and a halt",
+    "PROOF: a fault whose cause is the STACK — a wild SP plus an undefined instruction — must not storm. Review measured 2,328,136 exceptions in six seconds with the guard placed inside fault_stop, because the vector entry pushed a 256-byte frame before reaching it. Show the count with a machine-level exception trace, and show the machine stopped by itself rather than by the timeout",
+    "PROOF: the vector table's own detents refuse. Show the link failing on an entry over 128 bytes (which doubles the stride and makes every slot name wrong), on a missing entry, and on a UART base the emergency path's movz cannot form",
+    "the boot test must distinguish a fault taken during a failure from a clean boot: both exit 0 through PSCI, so it needs its own marker and its own top-level check. That check belongs on main under the orchestrator, NOT on this branch — ci/ is in does_not_touch and no acceptance criterion may authorise its own violation",
+    "PROOF: a panic raised part-way through the fault report must not hang. It reached fail_stop with the flag already set, whose already-failing branch halted in a wfi loop — measured as a truncated report, thirty seconds of silence and exit 124. Show it exiting by itself",
+    "the re-entrancy flag must be COMPARED to its pattern, not tested non-zero. .bss sits directly below .stack, so an overflow writes the flag first; under a non-zero test a stray byte costs the next genuine fault its report",
+    "PROOF: the emergency path's OWN device access must not storm. Point its UART base at unmapped space so its first access aborts, inject a wild SP plus udf, and show a machine-level exception trace bounded at three. Note honestly that the third end is a wfi loop and QEMU exits 124",
+    "REVIEW: the emergency path in the vector table writes the PL011 and issues PSCI while holding neither, because it has no stack to hold them with. It is a device-access site that no grep for constructors can see. Say so in the RFC, or do not add it",
     "ci/constitution-check.sh --check hal-boundary passes",
     "ci/constitution-check.sh --check no-kernel-deps passes",
     "grep for BootConsole::new and PowerControl::new finds call sites ONLY in fail.rs — the fault path must not add a minting site",
@@ -61,6 +83,8 @@ touches = [
     "kernel/src/arch/aarch64/boot.rs",
     "kernel/src/arch/aarch64/mod.rs",
     "kernel/src/arch/aarch64/link.ld",
+    "kernel/src/arch/aarch64/pl011.rs",  # register offsets raised to pub(super)
+    "kernel/src/arch/aarch64/psci.rs",   # the function ID, likewise
 ]
 does_not_touch = [
     "ci/                — the implementer may not edit the checks that judge it",

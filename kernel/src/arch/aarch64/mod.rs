@@ -9,7 +9,9 @@
 
 mod boot;
 mod cpu;
+mod exception;
 mod fail;
+mod hex;
 mod pl011;
 mod platform;
 mod psci;

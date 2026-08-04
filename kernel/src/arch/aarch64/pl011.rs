@@ -18,11 +18,16 @@ pub struct BootConsole {
 
 impl BootConsole {
     /// Data register. Writing a byte transmits it. Write-only here.
-    const DR: usize = 0x000;
+    // `pub(super)`, so that the vector table's re-entrancy path can reach the
+    // console without a second copy of these three facts. It writes the UART
+    // directly — it has no stack and cannot construct a `BootConsole` — and a
+    // duplicated register offset is how a driver and its emergency path drift
+    // apart. Visible within `arch::aarch64` only; portable code sees nothing.
+    pub(super) const DR: usize = 0x000;
     /// Flag register. Read-only here.
-    const FR: usize = 0x018;
+    pub(super) const FR: usize = 0x018;
     /// `FR.TXFF` — transmit FIFO full.
-    const FR_TXFF: u32 = 1 << 5;
+    pub(super) const FR_TXFF: u32 = 1 << 5;
 
     /// # Safety
     /// `base` must be the MMIO base of a PL011 that no other code touches, and

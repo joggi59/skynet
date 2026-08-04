@@ -10,10 +10,14 @@ objective = "0002"      # Re-filed from 0001. This work satisfies objective 0002
                         #
                         # The previous wording named which judge had rejected
                         # which contribution over it. A file every judge reads
-                        # before ruling is not the place for that, and the rule
-                        # it broke had been written for commit messages only —
-                        # which is why the same leak reappeared in a different
-                        # artefact.
+                        # before ruling is not the place for that.
+                        #
+                        # An earlier version of this note added that the rule it
+                        # broke "had been written for commit messages only".
+                        # That is false: governance/SEPARATION_OF_POWERS.md
+                        # names task files explicitly, and named them before
+                        # that note was written. It was an excuse, inside a
+                        # record of my own defect, and a judge caught it.
 state = "open"
 estimated_difficulty = "medium"
 profile = "standard"

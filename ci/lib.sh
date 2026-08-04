@@ -17,6 +17,32 @@
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Where the forge's STATE lives, which is not the same question as where this
+# checkout lives.
+#
+# REPO_ROOT is derived from this script's own path, so inside a git worktree it
+# is the worktree — correct for building and checking, since that is the tree
+# under test. It is wrong for contribution records and the ledger, which belong
+# to the repository as a whole: a worktree has no `.forge/`, so `forge
+# contribution_submit` run from one counted zero existing contributions and
+# allocated C-0001, an identifier eight contributions old. It created the
+# directory rather than failing.
+#
+# `--git-common-dir` resolves to the MAIN checkout's `.git` from anywhere,
+# including inside a worktree. If it cannot be resolved there is no repository
+# and no honest fallback, so this fails rather than guessing.
+if _common=$(git -C "$REPO_ROOT" rev-parse --git-common-dir 2>/dev/null); then
+    case "$_common" in
+        /*) ;;
+        *)  _common="$REPO_ROOT/$_common" ;;
+    esac
+    FORGE_ROOT="$(cd "$_common/.." && pwd)"
+    unset _common
+else
+    FORGE_ROOT=""
+fi
+export FORGE_ROOT
 export REPO_ROOT
 
 # Colour only when attached to a terminal, so logs and evidence files stay clean.

@@ -199,8 +199,10 @@ const _: () = assert!(
 /// The emergency paths used to be inlined into the macro, so all sixteen entries
 /// carried a private copy of the marker string, the console poll and the PSCI
 /// call — 124 bytes of the 128 available, with no room for any of the four
-/// defects review then found. They are shared functions in `.text` now, reached
-/// by a branch, and an entry is 84 bytes.
+/// defects review then found. They are shared code in `.failpath`, below `.text`
+/// and reached by a branch, and an entry is 92 bytes — objdump, not memory: this
+/// sentence said 84 and `.text` while `link.ld`, in the same patch, said 92 and
+/// `.failpath`.
 ///
 /// 128 bytes is a hard limit the assembler will not warn about: overflow one and
 /// the next entry starts in the middle of your code. `link.ld` asserts it.
@@ -366,19 +368,13 @@ unsafe extern "C" fn emergency_report() -> ! {
 
 /// Rung three: stop the machine without touching a device.
 ///
-/// Reached when the marker path itself faulted, and as the ordinary end of that
-/// path. Claims rung four first, so a fault in the `hvc` lands on
-/// [`terminal_stop`] instead of trying the same `hvc` again forever — which is
-/// what a three-rung ladder did, and why there are four.
+/// Reached from a vector entry, which advanced the ladder before branching here,
+/// or from `emergency_report`. Takes nothing, advances nothing, stores nothing.
 ///
 /// # Safety
-/// Reached from a vector entry or from `emergency_report`. Takes nothing, and
-/// advances nothing — the entry did that before branching here. An earlier
-/// version of this comment said the function claimed a rung.
-///
-/// Not "uncallable from Rust" — an earlier version of this comment said that
-/// of these three functions, having just withdrawn the identical claim about
-/// two others forty lines away. `#[link_name]` reaches any symbol.
+/// Never returns. Not "uncallable from Rust" — `#[link_name]` reaches any symbol,
+/// and an earlier version of this comment claimed otherwise while a paragraph
+/// five lines below said the opposite.
 #[unsafe(naked)]
 #[unsafe(link_section = ".failpath")]
 unsafe extern "C" fn quiet_stop() -> ! {

@@ -36,9 +36,28 @@ SECTIONS
      *
      * What this buys, exactly, and what it does not.
      *
-     * It buys DISTANCE against an overflow that descends a frame at a time:
-     * about 2.9 KiB of `.rodata` and `.text` that must be destroyed before
-     * anything the failure path needs is touched. Measured against the ordering
+     * It buys DISTANCE against an overflow that descends a frame at a time.
+     *
+     * An earlier version of this comment said "about 2.9 KiB before anything the
+     * failure path needs is touched". With `.rodata` above `.text` the real
+     * figure was 728 bytes — wrong by a factor of four, in the reassuring
+     * direction, which is the direction this file has now been wrong in four
+     * times. It was wrong because every probe used to find it destroyed its own
+     * writing loop, so each depth reported the writer's address rather than the
+     * parameter.
+     *
+     * Measured with a writer relocated to 0x44100000, outside everything it
+     * destroys, on this ordering. These are bracketing points, not thresholds:
+     *
+     *   up to 3,072 B   3 exceptions, report or marker, exit 0
+     *      about 4,096  4 exceptions, bounded, silent, exit 124
+     *   5,300 B and up  ~3.9 million exceptions, exit 124
+     *
+     * The transitions lie between those brackets and are not stated more
+     * precisely than they were measured. The last row is the vector table itself
+     * being destroyed: 5,300 bytes below `__stack_top - STACK_SIZE` is 44 bytes
+     * INSIDE `.vectors`, not above it — arithmetic this comment also got wrong
+     * once. Nothing in a linker script prevents it, and the answer is the MMU. Measured against the ordering
      * this replaced, where the guard sat directly beneath the stack: the same
      * gradual overflow gave between 2.2 and 4.0 million exceptions with an empty
      * console and exit 124, and gives three exceptions and a clean stop here.
@@ -111,6 +130,27 @@ SECTIONS
      * kernel ever says are as hard to destroy as the table that reaches them. */
     .failpath : ALIGN(8) { KEEP(*(.failpath)) }
 
+    /* Read-only data BELOW the code that reads it.
+     *
+     * The failure path does not only need instructions. `fault_stop` compiles to
+     * a jump table — `adr x14,.` / `ldrsw x15,[x13,x12,lsl #2]` / `add x14,x14,x15`
+     * / `br x14` — and that table is `.rodata`. With `.rodata` above `.text` it
+     * sat 728 bytes under the stack, and zeroing one entry made `add x14,x14,0`
+     * branch the instruction to itself **forever, taking no exception at all**.
+     * No ladder can advance on a fault that is never raised; review measured one
+     * exception, twenty-three NUL bytes, and a timeout.
+     *
+     * Below `.text`, a descending stack destroys instructions before it destroys
+     * the data they read — and destroying instructions raises an exception
+     * promptly, which is the event the whole ladder is built on.
+     *
+     * The general rule this file is converging on, stated because it has been
+     * rediscovered four times at four different distances: everything the
+     * failure path depends on must be further from the stack than everything it
+     * does not. Code before data, and the failure path's own code and data
+     * furthest of all. */
+    .rodata : ALIGN(8) { *(.rodata .rodata.*) }
+
     .text : ALIGN(8) {
         /* KEEP so _start survives --gc-sections.
          *
@@ -172,7 +212,6 @@ SECTIONS
     ASSERT(SIZEOF(.guard) >= 4,
            "the re-entrancy guard section is empty or too small: nothing is holding the flag")
 
-    .rodata : ALIGN(8) { *(.rodata .rodata.*) }
     .got    : ALIGN(8) { *(.got) *(.got.plt) }
     .data   : ALIGN(8) { *(.data .data.*) }
 

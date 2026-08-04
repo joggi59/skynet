@@ -117,7 +117,7 @@ pub(super) const STOPPING: u32 = 0x5a5a_a5a5;
 /// so a machine that got there exited 124 and looked exactly like a hang; and if
 /// it had instead tried PSCI, a fault in the `hvc` would have come back to the
 /// same state and tried again forever. A fourth value lets each rung do strictly
-/// less than the one above and still say something, with [`TERMINAL`] below it
+/// less than the one above and still say something, with a two-instruction stop
 /// as the end that touches nothing at all.
 pub(super) const SILENT: u32 = 0x3c3c_c3c3;
 

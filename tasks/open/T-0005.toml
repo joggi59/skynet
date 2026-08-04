@@ -1,0 +1,343 @@
+[task]
+id = "T-0005"
+title = "Make the fault path's bound of three true of the machine"
+rfc = "0002"
+objective = "0002"      # Objective 0002's first success criterion is "A fault
+                        # produces a legible report naming the exception class,
+                        # the faulting address where one exists, and the
+                        # instruction — instead of a silent loop." C-0011 met it
+                        # for the ordinary case and was approved on that basis.
+                        # Review then measured three surviving cases where the
+                        # criterion is still not met — 1,495,553 exceptions with
+                        # an empty console, a single exception with an empty
+                        # console, and an unbounded spin — every one of them a
+                        # silent loop. This task finishes the criterion C-0011
+                        # partly met; it does not open a new one.
+                        #
+                        # Objective 0002's common_good names the thing to be
+                        # removed by name: "a silent hang and a thirty-second CI
+                        # timeout". All three surviving cases exit 124 with
+                        # nothing on the console. Milestone kernel = ["M1"],
+                        # which is where this sits.
+                        #
+                        # Not 0001: its milestone list is ["M0"] and none of its
+                        # six success criteria concern faults.
+state = "open"
+estimated_difficulty = "medium"
+profile = "standard"
+
+statement = """
+C-0011 installed exception vectors and a three-state re-entrancy guard, and the
+sentence that justifies the design is "the emergency path is bounded at three
+exceptions". Six judges approved it. The safety reviewer's closing line is the
+reason this task exists: that sentence "is true of the emergency path, and it is
+not yet true of the machine."
+
+Three measured cases escape the bound, and one of them is the fault class the
+whole RFC was written for.
+
+  A stack overflow destroys the vector table. `.stack` is the highest section in
+  the image and the stack descends from `__stack_top` through `.bss` — which
+  holds the guard byte — and then through `.vectors` itself. Measured: unbounded
+  recursion gives 1,495,553 exceptions in three seconds, an empty console and
+  exit 124, with `-d int` showing an undefined instruction taken AT vector entry
+  4 (0x40080a00) and vectoring straight back to it. A controlled overrun pins the
+  boundary: 16 bytes past the bottom of `.stack` still reports normally in 2
+  exceptions and exits 0; 800 bytes prints a garbled report then SKYNET_REFAULT
+  in 3 exceptions and exits 0; 2,200 bytes gives 1,515,060 exceptions and exit
+  124.
+
+  One value of the guard byte silences the first genuine fault. The entry tests
+  `cmp w1, #{stopping}; b.eq 25f` before anything else, and 25 is the dead `wfi`.
+  A guard byte corrupted to exactly 0x5a therefore sends the FIRST real fault to
+  a silent stop: measured at 1 exception, no console output whatsoever, no PSCI,
+  exit 124. The same corruption to 0xa5 still prints SKYNET_REFAULT and powers
+  off cleanly. The third state bought a bound and sold one byte in 256 for total
+  silence, and nothing records the trade.
+
+  A console that never drains is not bounded at all. Both TXFF polls — the
+  emergency path's `ldr w3,[x1,#0x18] / tbnz w3,#5,22b` and `BootConsole::write`
+  at pl011.rs:77 — spin forever if the FIFO never empties. Measured with the
+  emergency path's base pointed at 0x20000000, inside QEMU virt's PCIe MMIO
+  window, which responds and reads back all-ones: the kernel hangs after TWO
+  exceptions. The three-state machine never engages, because a poll that never
+  aborts takes no third exception to bound. This one is inherited from
+  `BootConsole::write` on main rather than introduced by C-0011.
+
+And one latent case. `fail_stop` still stores FAILING before it compares —
+`ldrb w9,[x8,#760]` / `strb w10,[x8,#760]` / `cmp w9,#0xa5` — which downgrades
+STOPPING to FAILING. That is the same oscillation the vector entry was rewritten
+to remove, left in the sibling function. It is unreachable today for exactly one
+reason: no Rust runs between the emergency path's STOPPING store and its `hvc`.
+Nothing states that precondition, nothing checks it, and the first Rust call
+added to that path re-arms the oscillation silently.
+
+The second half of this task is that the record must match the code. C-0011 was
+refused three times over comments asserting properties the same patch made
+false, and the merged revision still carries five of them — a bit count stated
+two ways, an entry comment describing registers it does not save and a stack
+frame it does not write, a claim that all sixteen entries write the flag on
+every exception, a claim that fault report values are "chosen by this code and
+not by a caller", and a SAFETY comment invoking a guard that is not there. These
+are not cosmetic here. Every one of them is a sentence a reader would use to
+decide whether the bound holds.
+
+Nothing in this task needs the MMU. The guard page is O-1 and O-9's structural
+answer, it does need the MMU, and it is not asked for here.
+"""
+
+[task.acceptance]
+# Grouped. A, B, C and D are behaviour and each is independently measurable.
+# E is the record. F is what every task inherits.
+#
+# Two criteria are worded differently from their T-0004 ancestors because review
+# found the ancestors unsatisfiable as written — see [task.notes].
+criteria = [
+    # --- Standing checks -----------------------------------------------------
+    "ci/build.sh exits 0",
+    "ci/build.sh --lint reports zero clippy warnings",
+    "ci/boot-test.sh passes and a successful boot prints exactly what it prints today — SKYNET_BOOT_OK and nothing else",
+    "SKYNET_PROFILE=nano ci/build.sh --size is within the 192 KiB budget AND the submission reports the number. Today it is 4,836 bytes of 196,608. A jump to roughly 70,000 means an allocated section was placed above a NOBITS one and objcopy padded across the 64 KiB stack — link.ld lines 76-78 already warn about exactly that, and it is the first thing to check if the number moves",
+    "ci/constitution-check.sh --check vector-alignment passes: readelf still shows the .vectors section 2 KiB aligned wherever it now sits",
+    "ci/constitution-check.sh --check hal-boundary passes",
+    "ci/constitution-check.sh --check no-kernel-deps passes",
+
+    # --- A. The stack overflow reaches the table -----------------------------
+    "PROOF: unbounded recursion must not storm. Measured today at 1,495,553 exceptions in three seconds, an empty console and exit 124, with -d int showing an undefined instruction taken at 0x40080a00 — vector entry 4 — and vectoring back to itself. Show a machine-level exception trace, a console that is not empty, and a machine that stopped by itself rather than by the timeout",
+    "PROOF: re-run the controlled overrun at all three depths and report all three. Today: 16 bytes past the bottom of .stack gives a normal SKYNET_FAULT in 2 exceptions, exit 0; 800 bytes gives a garbled report then SKYNET_REFAULT in 3 exceptions, exit 0; 2,200 bytes gives 1,515,060 exceptions and exit 124. The 2,200-byte case must end like the 800-byte case. State the new boundary in bytes — the overrun depth at which the machine stops stopping — or state that none was found within the 64 KiB stack and how far you went",
+    "REVIEW: the submission states, from readelf -S output and in one paragraph with the actual addresses, where .vectors, .bss and .stack now sit and why a stack descending from __stack_top no longer destroys the first two. This is the criterion a reviewer will read first; a diff of link.ld without it is a layout change nobody can check",
+    "OPEN: RFC-0002 O-9 says 'Without an MMU there is no guard page and no way to make the stack's overflow land somewhere harmless', and that a corrupted guard byte 'turns the first genuine fault into a machine that stops and says why'. Review measured both false. Amending the RFC belongs to the architect and NOT to this task or its implementer. Nothing here requires a guard page, and no criterion above names a layout — if the architect concludes the placement remedy is wrong, release group A rather than argue it inside a patch",
+
+    # --- B. One guard byte value silences the first fault --------------------
+    "PROOF: with IN_FAILURE pre-set to 0x5a before any fault is taken, the first genuine fault must not vanish. Measured today: exactly 1 exception, no console output at all, no PSCI, exit 124 — the entry's cmp against STOPPING sends it to the dead wfi at label 25. Under 0xa5 the same corruption prints SKYNET_REFAULT and powers off, exit 0. Show the 0x5a case producing output and stopping by itself",
+    "PROOF: sweep the byte. Pre-set IN_FAILURE to each of the 256 possible values, take one genuine fault, and show that no value produces both an empty console and exit 124. Report the count of values that reach the timeout at all, and name them. This is 256 boots and it converts 'one stray value in 256' from an argument into a measurement",
+    "REVIEW: STOPPING's doc comment carries the .bss-corruption hazard that FAILING's comment directly above it treats as central, or the hazard is gone. Today the two ends of the guard disagree under the same corruption and only one of them says so",
+
+    # --- C. fail_stop can still demote the state -----------------------------
+    "the disassembly of fail_stop shows no store to the guard before the compare that reads it. Today: ldrb w9,[x8,#760] / strb w10,[x8,#760] / cmp w9,#0xa5 — load, unconditional store, then the test. The vector entry already writes only on the path that continues; this is the same shape in the sibling function",
+    "REVIEW: whatever keeps STOPPING from being demoted is stated where it is relied on, not left as a property of the current shape of sixteen lines of assembly. Today the safety rests on 'no Rust executes while STOPPING is set' and no file says so, so the first richer epitaph, per-core hook or watchdog kick on that path re-arms the oscillation and leaves no trace",
+
+    # --- D. A poll that never returns ----------------------------------------
+    "PROOF: a UART that responds but never drains must not hang the machine. Measured today with the emergency path's uart_hi pointed at 0x20000000 — QEMU virt's PCIe MMIO window, which reads back all-ones so FR.TXFF never clears: the kernel hangs after TWO exceptions, spinning in ldr w3,[x1,#0x18] / tbnz w3,#5,22b, and the three-state machine never engages because no third exception is ever taken. Show the machine stopping by itself",
+    "both polls are bounded or the submission says why only one is. The same unbounded loop is in BootConsole::write at pl011.rs:77 — 'while read_volatile(fr) & FR_TXFF != 0 {}' — and it is inherited from main rather than introduced by C-0011. Bounding one end and leaving the other means the fault path survives a dead console and the boot path does not",
+    "REVIEW: the bound does not truncate a working console. A retry count low enough to fire on a merely busy FIFO turns every fault report into a partial one, which trades a rare hang for a common lie",
+
+    # --- E. The record must match the code -----------------------------------
+    "grep -rE 'reviewer-(safety|constitution|conformance)|guardian-[0-9]' over kernel/ returns nothing. Today it returns four: boot.rs:62, fail.rs:173, fail.rs:185, link.ld:48. The measurements are the valuable part and survive deletion of the role names — keep every number, drop every attribution",
+    "REVIEW: the submission states which unnamed collective attributions it also removed and on what rule. fail.rs:33 ('three judges and two reviewers verified'), fail.rs:131 ('A reviewer') and fail.rs:277 ('Two judges compiled the counter-example') are the same disclosure with the name taken out. SEPARATION_OF_POWERS.md forbids 'another judge's verdict, direction, or reasoning'; ci/constitution-check.sh --check panel-leak requires a name beside a verdict word and does not reach kernel/ at all. State which of the two you applied so a reviewer can disagree with a stated rule instead of guessing at an unstated one",
+    "fail.rs states one bit count for the portable reach-around, not two. Today line 135 says 192 bits and line 280 says 160. Measured: write_u32(esr) emits 32 bits, write_u64(far) and write_u64(elr) emit 64 each — 160 reach the console. 192 is the argument width. RFC-0002 section 5 uses 160",
+    "REVIEW: fail.rs no longer claims a fault report is 'register values — facts about the machine, chosen by this code and not by a caller' (today at fail.rs:268-270). RFC-0002 section 4 already records that sentence as corrected — 'They are parameters' — and reviewer-constitution reached fault_stop from a portable file with values of its own choosing. It is the one surviving sentence of the withdrawn containment claim, it sits 120 lines below the withdrawal, and it runs in the mitigating direction",
+    "REVIEW: the other residual overclaim goes with it — the closing paragraph asserting that fail_stop's 'static bound 'now enforces' that only a compile-time constant is passed. A #[link_name] extern bypasses the type system and that bound with it, which is the file's own argument nine lines above",
+    "fail.rs:46's clause 'All sixteen vector entries read it and write it, on every exception' is corrected. The entries write it on two of three paths: the STOPPING path reads the flag and branches to the dead stop without writing. The next paragraph already implies the opposite",
+    "exception.rs's naked_asm! heading describes the code that is there. Today it opens 'make room for x0-x30, save the two registers the entry itself uses, save the rest' and '256 bytes of stack', then contradicts itself eight lines later. The entry clobbers x0-x3, saves nothing and writes no stack; the measured Rust-side frame is 64 bytes — 16 in exception_entry, 48 in fault_stop. This is the single place the whole re-entrancy bound is argued",
+    "fault_stop's SAFETY comment names the holder of its 'at most once' invariant. Today it says 'the guard above makes the at-most-once clause true of this function too', three lines after a comment correctly stating 'NO guard check here'. The invariant is real and is held by the vector entry, in exception.rs",
+    "REVIEW: the superseded paragraphs in fail.rs are removed, not added to. Line 154 restates line 126-128 verbatim; the paragraph after it still says what 'must not be allowed to' turn this into a global console, including 'acquiring a second call site', immediately below the paragraphs establishing that nothing prevents it and after a reviewer acquired one; and the 'load and store, not swap' argument appears twice, at 166-180 and again at 195-197. Every previous version of the withdrawn claim survived by being added beside its correction instead of replacing it",
+    "REVIEW: the guard's memory ordering is either made explicit or its assumption is written down. It is read from Rust with one relaxed atomic load and written from naked assembly LLVM cannot see; relaxed loads of one location may legally be folded, and the correctness rests on there being exactly one load in the whole kernel. That is an accident of the current code, not a property of the types",
+    "link.ld's size ASSERTs no longer admit a table whose last entry is up to 128 bytes short, or the slack is stated. Today SIZEOF(.vectors) is asserted > 0x780 and <= 0x800 and the table measures 0x7fc because the sixteenth entry is unpadded",
+
+    # --- F. Constitutional ---------------------------------------------------
+    "the fault path adds no new device-access site: ci/constitution-check.sh --check minting-sites still reports exactly 4 sites, all in boot.rs and fail.rs, and no raw MMIO write appears outside the vector table's existing emergency path. NOTE the check is known blind to raw MMIO from any file (RFC-0002 O-10) — passing it is necessary and not sufficient, and the REVIEW below is what actually holds",
+    "REVIEW: no new path reaches a device. The emergency path already writes the PL011 and issues PSCI holding neither, which RFC-0002 accounts for and records an M4 argument as owed. This task must not add a second such path — bounding a poll is not a licence to open one",
+    "the report still goes to the local console only. No counter, no timer read, no accumulated state, nothing that outlives the failure — invariant 5 is pending until M6 and CI will not catch a violation",
+    "no portable file gains a line. kernel/src/main.rs, hal.rs, panic.rs and arch/mod.rs stay byte-identical, and if one must change, say why in the submission rather than changing it quietly",
+]
+
+[task.scope]
+touches = [
+    "kernel/src/arch/aarch64/link.ld",
+    "kernel/src/arch/aarch64/exception.rs",
+    "kernel/src/arch/aarch64/fail.rs",
+    "kernel/src/arch/aarch64/pl011.rs",   # the TXFF poll in BootConsole::write
+    "kernel/src/arch/aarch64/boot.rs",    # one attribution at line 62, and the
+                                          # stack pointer setup if the layout moves
+]
+does_not_touch = [
+    "ci/                — the implementer may not edit the checks that judge it. Four CI findings from this cycle are listed in [task.notes] and belong to the orchestrator",
+    "rfcs/              — RFC-0002 O-9 is now known false in two places and O-11 understates its own residual class. Amending it is the architect's. If the design here is wrong, release the task",
+    "roadmap/, governance/, CONSTITUTION.md, constitution.toml",
+    ".provenance/",
+    "tasks/            — including this file. C-0011's implementer wrote seven of its own acceptance criteria, review found it, and that finding is why this task was written by a decomposer instead. If a criterion here is unsatisfiable, say so in the submission and let it be corrected where it was written",
+    "kernel/src/main.rs, hal.rs, panic.rs, arch/mod.rs",
+]
+
+[task.constitutional]
+at_risk = [
+    "3 — total provenance, the record must be true: this is the substance of criterion group E and the reason C-0011 was refused three times. Every claim you leave in a comment is a claim someone will rely on to decide whether the bound holds. Removing a false sentence beats narrowing it, and adding a correction beside the sentence it corrects is how the last three survived",
+    "6 — HAL boundary: entirely architecture-specific, and no portable file may gain a line. A layout change is a linker-script change and link.ld lives inside the HAL directory for exactly that reason",
+    "4 — frugality: a layout change can inflate the flat binary by the size of the stack without changing a line of code. Report the number on the nano profile",
+    "1 — no ambient authority (pending, M4): the emergency path is the third device-access site and the RFC records its M4 argument as owed. Bounding its poll must not widen what it can reach, and check_minting_sites is known blind to raw MMIO, so this one is held by a reviewer and not by CI",
+    "5 — zero telemetry (pending, M6): the report goes to the local console. A retry counter that survives the failure, or any state accumulated across faults, is the beginning of the thing invariant 5 forbids",
+]
+
+[task.notes]
+hints = """
+WHY THIS TASK IS ONE TASK AND NOT TWO.
+
+Groups A-D are behaviour and group E is prose, which reads like two tasks. They
+are one because they edit the same three files and, in fail.rs and exception.rs,
+largely the same paragraphs: the comment that argues the bound is the comment
+that describes the state machine you are changing. Two branches doing this
+concurrently conflict on every hunk. Group A is the only part with an unresolved
+design question above it, so it is the part to release if the architect's
+amendment goes the other way — B through F do not depend on it.
+
+ON WHETHER THE STACK FIX REALLY NEEDS NO MMU.
+
+The reviewer asserts it does not. I did not take that on faith and I did not
+design the fix. What I checked:
+
+  The geometry is exactly as described. link.ld places sections in script order
+  at ascending addresses with no intervening location-counter assignment:
+  .text at KERNEL_BASE, then .vectors ALIGN(2048), .rodata, .got, .data,
+  .bss (NOLOAD, 8 bytes, holding IN_FAILURE), .stack (NOLOAD, 64 KiB) with
+  __stack_top at its top. boot.rs loads sp from __stack_top, so the stack
+  descends from the highest address in the image straight through the guard byte
+  and then through the table. Nothing about that ordering involves hardware.
+
+  The 800-byte measurement is the load-bearing evidence, and it is the
+  reviewer's own: with .rodata already destroyed the machine still stopped with
+  SKYNET_REFAULT and exited 0. So the bound survives losing everything between
+  the guard and the table. What it does not survive is losing .vectors, .bss or
+  the handler in .text. Moving those out of the descent path, or putting enough
+  distance in front of them, is a placement question and placement is what a
+  linker script is.
+
+  A hard boundary without page tables is separately demonstrated inside this
+  repository. Three judges measured a data abort at FAR 0x50000018 by pointing
+  the emergency path's UART base at unmapped physical space with the MMU off. An
+  access that runs off the end of RAM faults on this platform today, without a
+  page table, which is what "the overflow aborts instead of scribbling" needs.
+
+  So: plausible enough to write a criterion around. Not free, and here are the
+  two costs the reviewer did not name, which is why every criterion in group A
+  is a measurement and none of them names a mechanism.
+
+    Placing .vectors above __stack_top as literally worded puts an allocated
+    PROGBITS section above a NOBITS one, and objcopy -O binary pads across it.
+    That is a 64 KiB flat binary where there is now a 4,836-byte one. It stays
+    inside the 192 KiB nano budget and it is still a fourteenfold inflation with
+    an explicit warning against it already sitting at link.ld lines 76-78.
+
+    Putting .stack at RAM base puts it in the low 512 KiB that link.ld reserves
+    for the device tree QEMU builds — and objective 0002's second success
+    criterion needs that device tree.
+
+  Choosing between them, or finding a third, is a design decision. It belongs in
+  the RFC, made by the architect, not inside a task file and not inside a patch.
+  That is what the OPEN: criterion in group A says and it is not a formality.
+
+TRAPS.
+
+  The 2 KiB alignment survives wherever .vectors goes — ALIGN(2048) on the
+  output section does it — but ci/constitution-check.sh --check vector-alignment
+  finds the section by grepping readelf output for the name. Rename it and the
+  check reports SKIP with exit 0 on an image whose table is in the wrong place.
+  The two link-time ASSERTs are what actually hold; keep them and keep the name.
+
+  Pre-setting IN_FAILURE for the 256-value sweep is not as simple as writing to
+  the static: boot.rs zeroes .bss between __bss_start and __bss_end before Rust
+  runs, so anything set earlier is erased. Set it after the zeroing and before
+  the fault, and say in the submission where you set it.
+
+  overflow-checks = true is on in release. A retry counter that can wrap takes
+  the panic path from inside the fault path, which is the case criterion 'a panic
+  raised part-way through the fault report must not hang' was written for on
+  T-0004. Write it so it cannot.
+
+  The emergency path has four bytes left of its 128-byte entry. RFC-0002 O-11
+  says so, and the linker ASSERT enforces it. Anything you add to the entry
+  itself has to fit; anything that does not fit is not an entry change.
+
+TWO CRITERIA WERE REWORDED, AND WHY.
+
+  Review found two of T-0004's criteria unsatisfiable as written, and asked the
+  decomposer's end to fix the wording so the next fault-path task inherits
+  something that means what it checks. T-0004 is in tasks/done/ and I may not
+  write there, so the corrections are inherited here instead:
+
+    'grep for BootConsole::new and PowerControl::new finds call sites ONLY in
+    fail.rs' is false of main and of every possible patch, because boot.rs mints
+    the boot console. The operative clause was the one after the dash. The
+    minting criterion above states the count and the two files instead.
+
+    'show the link failing on a UART base the emergency path's movz cannot form'
+    names the wrong mechanism: that one is a rustc const-assert, E0080, not a
+    link error. It is not re-asked here.
+
+WHAT I LEFT OUT OF THIS TASK, AND WHO OWNS IT.
+
+  ci/ — the orchestrator. Four findings, none of them this task's to touch:
+
+    check_minting_sites measures constructor names rather than device reach and
+    is blind to a raw MMIO write from any file — a portable kernel/src/leak.rs
+    doing write_volatile(0x0900_0000) printed on the operator's console and
+    passed the build, clippy -D warnings, all eight constitution checks and all
+    five boot-test assertions. RFC-0002 O-10 already prescribes the fix: look
+    for the address, not the name. A Guardian named the absence of any scheduled
+    obligation from that knowledge as its principal drift concern, and this task
+    cannot be that obligation because ci/ is not mine to schedule into it.
+
+    ci/ledger-schema.py fails open. `version = entry.get("schema", 0)` lets any
+    entry opt into V0 by omitting the field, and a merge entry with empty
+    reviewer_verdicts and guardian_verdicts exits 0 — so the mechanical check
+    for invariant 3 accepts a record asserting that nobody reviewed and nobody
+    judged. Suggested shape, from the reviewer: a floor keyed to position, so
+    entries at or beyond the index where the schema landed must declare
+    schema >= 1.
+
+    check_panel_leak's scope excludes kernel/, which is where C-0011's three
+    attributions were, and it is evadable by paraphrase — 'reviewer-constitution
+    said no.' passes. Criterion E1 above removes the attributions this cycle
+    produced; it does not stop the next ones, and only a check with kernel/ in
+    scope would.
+
+    ci/boot-test.sh does not rebuild. A judge got a 30-second timeout FAIL from
+    a stale artefact on a tree git reported as clean, then a clean rebuild
+    passed 5/5. Evidence describing a tree other than the one under review, with
+    nothing reporting the discrepancy.
+
+  rfcs/ — the architect. RFC-0002 needs an amendment pass and none of it may be
+  done from a kernel branch:
+
+    O-9 asserts there is no way without an MMU to make a stack overflow land
+    harmlessly, and that a corrupted guard byte now yields a machine that stops
+    and says why. Both were measured false — the first by the 800-byte case, the
+    second twice over, past 2 KiB of overrun and at guard byte 0x5a.
+    O-1 states the handler pushes 256 bytes; the measured Rust-side frame is 64.
+    O-11 says 'the fourth entry finds STOPPING'; the trace shows three
+    exceptions and three entries, the third of which finds it.
+    O-11's residual class is wider than it states: a UART that responds without
+    draining hangs after two exceptions and the three-state machine cannot bound
+    it, because no third exception is ever taken.
+    Section 2's pseudo-code still shows `mov w2,#0xa5; strb; cbnz w1,1f` and a
+    wfi ending — store-before-compare and test-non-zero, the two shapes the
+    shipped code explicitly rejects.
+    The non-goals still say 'the entry saves registers to report them' while
+    section 2's own correction states the entry writes no stack at all.
+    Section 1 specifies `.align 11`; the implementation uses a dedicated
+    `.vectors ALIGN(2048)` output section because .align 11 aligned the table
+    but not the symbol VBAR_EL1 is loaded from. Tried and rejected, unrecorded.
+    Open questions are numbered O-1, O-2, O-3, O-9, O-10, O-11 — two series in
+    one document, which collide the first time RFC-0002 opens a fourth local
+    question. A citation like 'RFC-0002 O-2' is unambiguous only by luck.
+    Section 5 records no obligation for invariant 5, while panic.rs's own doc
+    calls this console 'an outward channel' and declines to print a panic
+    message for that reason, and this path puts 160 bits of machine state on it.
+    Line 159 ends in a dangling fragment.
+
+  governance/ — the orchestrator, or the BDFL. governance/roles.toml grants the
+  implementer may_write = ["kernel/", "tasks/active/"]; SEPARATION_OF_POWERS.md
+  says the implementer may not touch 'its own acceptance criteria'; nothing
+  states which governs, unlike CONSTITUTION.md and constitution.toml which
+  resolve precedence explicitly. That conflict is why C-0011's implementer wrote
+  seven of its own criteria and why this task exists. Separately,
+  SEPARATION_OF_POWERS.md introduces its artefact list with 'That includes' —
+  non-exhaustive — while the check enforcing it has a fixed scope that stops at
+  kernel/. Neither is resolvable from a kernel branch or from tasks/.
+
+  The guard page — deferred, not dropped. O-1 and O-9's structural answer is an
+  unmapped page below the stack. It does need the MMU, it belongs with the MMU
+  part of M1, and nothing in this task asks for it. What this task asks for is
+  narrower: that the table and the guard stop being in the overwrite path, so
+  the bound that already exists gets to run.
+"""

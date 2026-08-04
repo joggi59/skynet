@@ -215,6 +215,20 @@ vector entry and `fail_stop` write; it writes a fixed sixteen-byte string from `
 be made to write anything else; and its last instruction stops the machine. It is not a console. It
 is a sixteen-byte epitaph.
 
+**O-11.** The emergency path is bounded at three exceptions, and the third end is a hang.
+
+Measured, with the emergency path's own UART base pointed at unmapped space so that its first device
+access aborts: `udf` with a wild SP gives exception 1 (undefined instruction), exception 4 (the Rust
+prologue's abort), exception 4 again (the emergency path's UART read) — and the fourth entry finds
+`STOPPING` and stops dead. Three exceptions, then `wfi`. Without the third state this is unbounded.
+
+The residual: that end is a `wfi` loop, so QEMU exits 124 and CI reads a timeout. It is a real hang,
+chosen — the path that would have powered the machine off is the one that just faulted, and reaching
+PSCI from the dead stop would need a fourth state to bound *it*, in an entry with four bytes left of
+its 128. What distinguishes it from an ordinary hang is the console, which ends at `SKYNET_BOOT_OK`
+with no marker, and an exception count of three rather than millions. That is thin, and it is what
+is available before the MMU.
+
 **O-10.** `check_minting_sites` greps for constructor names and is therefore blind to this path, and
 to any raw MMIO write from any file — review demonstrated the same blindness from a portable one.
 Counting constructors was never the invariant; reaching a device is. The check needs to look for the

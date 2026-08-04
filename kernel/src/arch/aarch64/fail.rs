@@ -42,9 +42,15 @@ use super::psci::PowerControl;
 /// lines directly beneath them, in the patch that wrote them.
 ///
 /// It is `pub(super)`, not module-private. It is an `AtomicU32` holding one of
-/// four values, not a flag. All sixteen vector entries READ it on every
-/// exception and each advances it on exactly one of its four paths —
-/// `exception.rs` takes it by `sym`. And its effect is no longer to halt: it selects between reporting the fault,
+/// four values, not a flag. All sixteen vector entries read it on every
+/// exception and advance it on three of their four paths — the fourth is the
+/// terminal rung, which has nothing left to advance to. `exception.rs` takes it
+/// by `sym`.
+///
+/// That sentence has now been wrong twice in opposite directions: first "read it
+/// and write it on every exception", then "advances it on exactly one of four
+/// paths", written in the commit that moved the advance INTO the entry and made
+/// three of them write. Counted in the disassembly this time, not remembered. And its effect is no longer to halt: it selects between reporting the fault,
 /// printing a sixteen-byte marker and stopping the machine, and stopping dead
 /// without touching a device.
 ///
@@ -310,9 +316,12 @@ impl Failure {
         // ladder before any stack was touched; checking again would see what
         // this fault's own entry just wrote and stop before printing anything.
 
-        // SAFETY: as for `fail_stop` — the kernel has failed, this never
-        // returns, and the guard above makes the "at most once" clause true of
-        // this function too.
+        // SAFETY: as for `fail_stop` — the kernel has failed and this never
+        // returns, so the console's other owner is provably dead. There is no
+        // "guard above" in this function; the earlier wording said there was,
+        // three lines under the comment saying this function checks no guard.
+        // What makes the "at most once" clause true is the vector entry, which
+        // advanced the ladder before branching here.
         let mut console = unsafe { console() };
         let mut put = |b: u8| console.write(&[b]);
 

@@ -371,18 +371,9 @@ check_provenance() {
     while IFS= read -r line; do
         [ -z "$line" ] && continue
         n=$((n+1))
-        if ! echo "$line" | python3 -c "
-import json,sys
-required = ['contribution_id','task','objective','agent','model',
-            'reviewer_verdicts','guardian_verdicts','evidence_digest','merged_at']
-try:
-    e = json.loads(sys.stdin.read())
-except Exception as ex:
-    print(f'not valid JSON: {ex}'); sys.exit(1)
-missing = [f for f in required if f not in e]
-if missing:
-    print('missing fields: ' + ', '.join(missing)); sys.exit(1)
-" >/tmp/.prov_err 2>&1; then
+        # Validated against the schema for its OWN event type — see
+        # ci/ledger-schema.py for why one field list made the ledger less true.
+        if ! echo "$line" | python3 "$REPO_ROOT/ci/ledger-schema.py" >/tmp/.prov_err 2>&1; then
             fail "ledger line $n malformed: $(cat /tmp/.prov_err)"
             bad=1
         fi

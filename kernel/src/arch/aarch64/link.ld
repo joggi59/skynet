@@ -52,8 +52,22 @@ SECTIONS
      * 2 KiB aligned — so the size is asserted too. */
     ASSERT((ADDR(.vectors) & 2047) == 0,
            "vector table is not 2 KiB aligned: VBAR_EL1's low 11 bits are RES0")
-    ASSERT(SIZEOF(.vectors) >= 0x700,
-           "vector table is missing or truncated: expected 16 entries of 128 bytes")
+    ASSERT(SIZEOF(.vectors) > 0x780,
+           "vector table is truncated: fewer than sixteen entries")
+
+    /* The stride detent, and the reason it is an upper bound.
+     *
+     * `.align 7` before each entry aligns it; it does not CAP it. An entry that
+     * grows past 128 bytes pushes the next one to the following boundary, and
+     * the table silently becomes sixteen entries at a 256-byte stride. The
+     * processor still indexes by 128, so every fault reports the wrong slot —
+     * cur_sp0_fiq where cur_spx_sync happened — and nothing else changes: it
+     * links, it boots, the alignment check passes, the report is simply false.
+     *
+     * Fifteen padded entries plus a final unpadded one is at most 16 * 128. One
+     * oversized entry anywhere puts the total above it. */
+    ASSERT(SIZEOF(.vectors) <= 0x800,
+           "a vector entry exceeds 128 bytes: the table's stride has doubled and every fault will name the wrong slot")
     .rodata : ALIGN(8) { *(.rodata .rodata.*) }
     .got    : ALIGN(8) { *(.got) *(.got.plt) }
     .data   : ALIGN(8) { *(.data .data.*) }

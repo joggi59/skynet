@@ -134,8 +134,8 @@ pub fn elr_is_indicative_only(esr: u64) -> bool {
 ///
 /// # Safety
 ///
-/// Reached only from a vector entry, which has already saved x0-x30 to the
-/// stack. Does not return: nothing at M1 is resumable — there is no scheduler to
+/// Reached only from a vector entry, which has already test-and-set the failure
+/// flag and written no stack. Does not return: nothing at M1 is resumable — there is no scheduler to
 /// reschedule onto, no page table to repair and no process to kill, so a fault
 /// is a kernel bug and the honest response is to say what happened and stop.
 unsafe extern "C" fn exception_entry(index: u64) -> ! {
@@ -151,11 +151,34 @@ unsafe extern "C" fn exception_entry(index: u64) -> ! {
         core::arch::asm!("mrs {}, elr_el1", out(reg) elr, options(nomem, nostack));
     }
 
-    // SAFETY: reached only from a vector entry, and this diverges. The failure
-    // path's own re-entrancy guard covers a fault raised from inside it — which
-    // is the storm review measured, and the gap it flagged in the panic guard.
+    // SAFETY: reached only from a vector entry, and this diverges. The entry has
+    // already test-and-set the failure flag — before touching any stack — so a
+    // fault raised anywhere below this line vectors straight back into the entry,
+    // finds the flag set, prints SKYNET_REFAULT and stops. That is the storm
+    // review measured at 2,328,136 exceptions, and the earlier guard placed
+    // eighteen faultable stores too late to catch it.
     unsafe { Failure::fault_stop(Slot::from_index(index), esr, far, elr) }
 }
+
+/// The emergency console path in the vector table builds the UART address with a
+/// single `movz … lsl #16`, which can only express a base whose low sixteen bits
+/// are zero. True of every PL011 placement this kernel has seen, and a link-time
+/// lie the moment it is not.
+const _: () = assert!(
+    super::platform::UART0_BASE & 0xffff == 0,
+    "UART0_BASE has a non-zero low half-word: the vector table's `movz` emergency \
+     path cannot form this address, and would write to the wrong one in silence"
+);
+
+/// The same emergency path stops the machine with a two-instruction immediate, so
+/// the function ID must fit in the low thirty-two bits. Every PSCI ID does; the
+/// assertion is here so that a future constant which does not fails the build
+/// rather than issuing an HVC with a truncated argument.
+const _: () = assert!(
+    super::psci::PSCI_SYSTEM_OFF >> 32 == 0,
+    "PSCI_SYSTEM_OFF does not fit in 32 bits: the vector table's emergency \
+     shutdown would issue a truncated function ID"
+);
 
 /// The vector table.
 ///
@@ -190,29 +213,59 @@ pub(super) unsafe extern "C" fn vector_table() -> ! {
         // 256 bytes of stack in a path that is about to stop. RFC-0002 O-1
         // records that a stack-overflow fault pushes further into whatever is
         // below; fixing that properly needs the MMU and belongs with it.
+        // The entry sets the failure flag BEFORE it touches anything, and
+        // writes no stack at all.
+        //
+        // An earlier revision pushed x0-x30 first and consulted the guard
+        // eighteen faultable stores later. A fault whose cause is a bad stack
+        // pointer therefore looped here forever: review measured 2,328,136
+        // exceptions in six seconds with no console output. The frame was also
+        // write-only — nothing ever read it, though the design said the report
+        // did.
+        //
+        // Ten instructions. Because the entry sets the flag, `fault_stop` must
+        // not check it again: checking twice would halt on the first fault and
+        // print nothing.
         ".macro ENTRY, idx",
-        "  sub  sp, sp, #256",
-        "  stp  x0, x1,   [sp, #16 * 0]",
-        "  stp  x2, x3,   [sp, #16 * 1]",
-        "  stp  x4, x5,   [sp, #16 * 2]",
-        "  stp  x6, x7,   [sp, #16 * 3]",
-        "  stp  x8, x9,   [sp, #16 * 4]",
-        "  stp  x10, x11, [sp, #16 * 5]",
-        "  stp  x12, x13, [sp, #16 * 6]",
-        "  stp  x14, x15, [sp, #16 * 7]",
-        "  stp  x16, x17, [sp, #16 * 8]",
-        "  stp  x18, x19, [sp, #16 * 9]",
-        "  stp  x20, x21, [sp, #16 * 10]",
-        "  stp  x22, x23, [sp, #16 * 11]",
-        "  stp  x24, x25, [sp, #16 * 12]",
-        "  stp  x26, x27, [sp, #16 * 13]",
-        "  stp  x28, x29, [sp, #16 * 14]",
-        "  str  x30,      [sp, #16 * 15]",
+        "  adrp x0, {guard}",
+        "  add  x0, x0, #:lo12:{guard}",
+        "  ldrb w1, [x0]",
+        "  mov  w2, #0xa5",
+        "  strb w2, [x0]",
+        "  cbnz w1, 20f",
         "  mov  x0, #\\idx",
         "  b    {handler}",
+        // Already failing. Say so on the console, then stop.
+        //
+        // An earlier revision halted here in silence, which made the one failure
+        // this table exists to prevent — a fault storm — indistinguishable from a
+        // clean shutdown, and made a corrupted guard byte turn the FIRST genuine
+        // fault into nothing at all. Sixteen bytes and no stack: the address is
+        // built with `movz`, the string is read with a post-indexed `ldrb`, and
+        // TXFF is polled so a full FIFO drops nothing.
+        "20: movz x1, #{uart_hi}, lsl #16",
+        "    adr  x0, 23f",
+        "21: ldrb w2, [x0], #1",
+        "    cbz  w2, 24f",
+        "22: ldr  w3, [x1, #{fr_off}]",
+        "    tbnz w3, #{txff_bit}, 22b",
+        "    str  w2, [x1, #{dr_off}]",
+        "    b    21b",
+        "23: .asciz \"SKYNET_REFAULT\\r\\n\"",
+        "    .balign 4",
+        // Stop the machine, rather than spin. A `wfi` loop here is honest about
+        // the state but indistinguishable from a hang, and a hang is what this
+        // whole path exists to remove: CI would see a timeout, which is the
+        // signal that hid the original storm for two contributions.
+        "24: movz x0, #{psci_off_lo}",
+        "    movk x0, #{psci_off_hi}, lsl #16",
+        "    hvc  #0",
+        // Unreachable — PSCI SYSTEM_OFF does not return. If it ever does, the
+        // machine is beyond diagnosis and this is the only safe end.
+        "25: wfi",
+        "    b    25b",
         ".endm",
 
-        // Current EL with SP_EL0 — unreachable: the kernel runs at EL1h.
         ".align 7", "ENTRY 0",
         ".align 7", "ENTRY 1",
         ".align 7", "ENTRY 2",
@@ -234,5 +287,12 @@ pub(super) unsafe extern "C" fn vector_table() -> ! {
         ".align 7", "ENTRY 15",
 
         handler = sym exception_entry,
+        guard    = sym super::fail::IN_FAILURE,
+        uart_hi  = const (super::platform::UART0_BASE >> 16),
+        dr_off   = const super::pl011::BootConsole::DR,
+        fr_off   = const super::pl011::BootConsole::FR,
+        txff_bit = const super::pl011::BootConsole::FR_TXFF.trailing_zeros(),
+        psci_off_lo = const (super::psci::PSCI_SYSTEM_OFF & 0xffff),
+        psci_off_hi = const ((super::psci::PSCI_SYSTEM_OFF >> 16) & 0xffff),
     )
 }

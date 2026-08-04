@@ -9,7 +9,10 @@ use crate::hal::{self, Cpu};
 use super::cpu::Processor;
 
 /// `SYSTEM_OFF`, PSCI 0.2+, 32-bit calling convention.
-const PSCI_SYSTEM_OFF: u64 = 0x8400_0008;
+// `pub(super)`, so the vector table's re-entrancy path can stop the machine with
+// the same function ID this module uses. That path has no stack and cannot hold a
+// `PowerControl`; it issues the HVC itself. One definition, two issuers.
+pub(super) const PSCI_SYSTEM_OFF: u64 = 0x8400_0008;
 
 /// Authority to power the machine off.
 ///

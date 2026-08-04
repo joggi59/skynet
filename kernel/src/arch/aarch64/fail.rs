@@ -2,7 +2,7 @@
 
 //! The failure path, and the only place outside `boot_rust` that mints a device.
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicU8, Ordering};
 
 use crate::hal::{self, Console, Cpu, Power};
 
@@ -39,7 +39,17 @@ use super::psci::PowerControl;
 /// It grants no authority. Its only reachable effect is to halt instead of
 /// recurse; it carries no information, cannot be read outside this module, and
 /// cannot be reached outside the panic path.
-static IN_FAILURE: AtomicBool = AtomicBool::new(false);
+pub(super) static IN_FAILURE: AtomicU8 = AtomicU8::new(0);
+
+/// The value that means "a failure is already in progress".
+///
+/// A pattern rather than a bit, and the reason is not elegance. `.bss` sits
+/// immediately below `.stack`, so a stack overflow overwrites this byte before
+/// it overwrites anything else — and review demonstrated an overflow setting it,
+/// turning the first genuine fault into a silent halt. One byte of pattern makes
+/// an accidental set less likely; it does not make it impossible. The structural
+/// answer is a guard page, which needs the MMU. RFC-0002, O-9.
+pub(super) const FAILING: u8 = 0xa5;
 
 /// The platform's fail-stop.
 ///
@@ -107,8 +117,8 @@ impl hal::FailStop for Failure {
         // with the MMU off this is Device-nGnRnE memory where the architecture
         // does not guarantee one.
         let already = IN_FAILURE.load(Ordering::Relaxed);
-        IN_FAILURE.store(true, Ordering::Relaxed);
-        if already {
+        IN_FAILURE.store(FAILING, Ordering::Relaxed);
+        if already != 0 {
             // Already failing. Do not touch the console: the previous entry may
             // have been interrupted mid-write, and whatever panicked will panic
             // again if asked to do the same work. Stop here.
@@ -165,17 +175,10 @@ impl Failure {
     /// cycle before this one. It was applied to the constructors and not to
     /// this function.
     pub(super) unsafe fn fault_stop(slot: Option<Slot>, esr: u64, far: u64, elr: u64) -> ! {
-        // Read, then set, BEFORE anything that can fault — see `fail_stop` for
-        // why the window between them is the entire guard, and why the observer
-        // that matters is this core taking a synchronous exception rather than a
-        // second core.
-        let already = IN_FAILURE.load(Ordering::Relaxed);
-        IN_FAILURE.store(true, Ordering::Relaxed);
-        if already {
-            // Already failing. A fault inside the failure path lands here and
-            // stops, instead of vectoring again into the same code.
-            Processor::halt()
-        }
+        // NO guard check here. The vector entry already test-and-set the flag,
+        // ten instructions after the exception was taken and before any stack was
+        // touched. Checking again would see the flag this fault's own entry set,
+        // and halt before printing anything.
 
         // SAFETY: as for `fail_stop` — the kernel has failed, this never
         // returns, and the guard above makes the "at most once" clause true of

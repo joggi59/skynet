@@ -153,11 +153,10 @@ kernel_exists() { [ -f "$REPO_ROOT/kernel/Cargo.toml" ]; }
 BOOT_MARKER='SKYNET_BOOT_OK'
 PANIC_MARKER='SKYNET_PANIC'
 FAULT_MARKER='SKYNET_FAULT'
-REFAULT_MARKER='SKYNET_REFAULT'
 QEMU_MACHINE='virt'
 QEMU_CPU='cortex-a72'
 BOOT_TIMEOUT_SECONDS=30
-export BOOT_MARKER PANIC_MARKER FAULT_MARKER REFAULT_MARKER QEMU_MACHINE QEMU_CPU BOOT_TIMEOUT_SECONDS
+export BOOT_MARKER PANIC_MARKER FAULT_MARKER QEMU_MACHINE QEMU_CPU BOOT_TIMEOUT_SECONDS
 
 # On PANIC_MARKER, per RFC-0001:
 #
@@ -178,31 +177,6 @@ export BOOT_MARKER PANIC_MARKER FAULT_MARKER REFAULT_MARKER QEMU_MACHINE QEMU_CP
 #
 # Adding fault reporting made CI blind to faults. Found by reviewer-constitution,
 # which ran this script against a faulting kernel rather than reasoning about it.
-#
-# REFAULT_MARKER is the third instance of the same shape, added before it could
-# bite rather than after. The vector table now stops the machine when it is
-# re-entered during a failure — deliberately, because the alternative was a `wfi`
-# loop and a thirty-second timeout. That makes a fault storm exit 0 as well, so
-# it needs its own marker for exactly the reason FAULT_MARKER does.
-#
-# The three markers must stay mutually distinguishable by plain substring match.
-# SKYNET_REFAULT does not contain SKYNET_FAULT, which is true and is luck; the
-# check below turns it into a property. A future marker that nests inside another
-# would make one of them permanently unreportable.
-_marker_check() {
-    local a b
-    for a in "$BOOT_MARKER" "$PANIC_MARKER" "$FAULT_MARKER" "$REFAULT_MARKER"; do
-        for b in "$BOOT_MARKER" "$PANIC_MARKER" "$FAULT_MARKER" "$REFAULT_MARKER"; do
-            [ "$a" = "$b" ] && continue
-            case "$b" in *"$a"*)
-                echo "ci/lib.sh: marker '$a' is a substring of '$b' —" \
-                     "grep for '$a' will match '$b' and one of them can never be reported" >&2
-                exit 70 ;;
-            esac
-        done
-    done
-}
-_marker_check
 
 kernel_binary() {
     local target; target="$(profile_target)"

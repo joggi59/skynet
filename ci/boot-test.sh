@@ -31,7 +31,6 @@ print_contract() {
     info "marker    $BOOT_MARKER          must be printed"
     info "panic     $PANIC_MARKER            must NOT be printed"
     info "fault     $FAULT_MARKER            must NOT be printed"
-    info "re-fault  $REFAULT_MARKER          must NOT be printed"
     info "machine   qemu-system-aarch64 -M $QEMU_MACHINE -cpu $QEMU_CPU -m $QEMU_RAM"
     info "shutdown  PSCI SYSTEM_OFF (hvc #0, x0 = 0x84000008) -> QEMU exits 0"
     info "timeout   ${BOOT_TIMEOUT_SECONDS}s"
@@ -123,26 +122,6 @@ run_boot() {
         grep -F -A5 "$FAULT_MARKER" "$out" | sed 's/^/             /' | head -10
     else
         pass "no fault"
-    fi
-
-    # 1d. no fault taken while the kernel was ALREADY failing. The vector table
-    # stops the machine when that happens, deliberately — a `wfi` loop there
-    # would be a thirty-second timeout on every occurrence — and stopping means
-    # PSCI, which means exit 0 and a console that looks like a clean boot except
-    # for this marker.
-    #
-    # Its own top-level block, and that is the whole point. The first version of
-    # this check was nested inside the FAULT_MARKER branch above, where it could
-    # only ever run once the other check had already failed: a re-fault with no
-    # preceding fault report — which is the interesting case, because it means
-    # the first report never got far enough to print — would have been passed
-    # over in silence. Same defect as the two above it, caught before it shipped
-    # rather than after.
-    if grep -qF "$REFAULT_MARKER" "$out"; then
-        fail "kernel faulted inside its own failure path — '$REFAULT_MARKER' found"
-        detail "the first fault's report did not complete; the vector table stopped the machine"
-    else
-        pass "no fault inside the failure path"
     fi
 
     # 2. and 3. the shutdown

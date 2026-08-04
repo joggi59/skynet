@@ -251,7 +251,8 @@ footer { border-top:var(--rule-w) solid var(--rule); padding-block:2.4rem 3.2rem
       <div class="st-row"><span>The <strong>system starts up</strong> on a simulated computer, says it
         is alive, and shuts down cleanly</span><span class="badge b-yes">Working</span></div>
       <div class="st-row"><span>It <strong>reports its own faults</strong> legibly instead of hanging
-        silently — the first thing that makes the rest debuggable</span><span class="badge b-now">In review</span></div>
+        silently — the first thing that makes the rest debuggable. Built and measured; refused twice by
+        the review process and resubmitted</span><span class="badge b-now">In review, third time</span></div>
       <div class="st-row"><span>The <strong>public voting site</strong> where people set the
         priorities</span><span class="badge b-now">Being built</span></div>
       <div class="st-row"><span><strong>Memory, running programs, files, a screen</strong> — everything
@@ -263,17 +264,17 @@ footer { border-top:var(--rule-w) solid var(--rule); padding-block:2.4rem 3.2rem
 
     <div class="scale">
       <h3>How far is it, really?</h3>
-      <p>Two numbers say it better than a paragraph. The kernel is <strong>187 lines of code</strong>.
-        The machinery built to review, judge and record changes to it is <strong>5,600</strong>.</p>
-      <p>That ratio is thirty to one, and it is deliberate at this stage — the process is the part
-        that has to be right before there is anything to protect. It would be absurd later, and it
-        will not stay this way.</p>
+      <p>Two numbers say it better than a paragraph. The kernel is <strong>453 lines of code</strong>.
+        The machinery built to review, judge and record changes to it is <strong>7,100</strong>.</p>
+      <p>That ratio is fifteen to one. It was thirty to one a cycle ago, and it is closing the right
+        way — by the kernel growing, not by the process being trimmed. The process is the part that
+        has to be right before there is anything worth protecting.</p>
       <div class="scale-bar" aria-hidden="true">
-        <div class="sb-done" style="flex:2"><span>187</span></div>
-        <div class="sb-todo" style="flex:98"><span>a comparable kernel is around 10,000 lines</span></div>
+        <div class="sb-done" style="flex:5"><span>453</span></div>
+        <div class="sb-todo" style="flex:95"><span>a comparable kernel is around 10,000 lines</span></div>
       </div>
       <p class="small" style="margin-top:.9rem">For scale: seL4, the small verified kernel this design
-        borrows from, is roughly ten thousand lines. So the system itself is about <strong>2%</strong>
+        borrows from, is roughly ten thousand lines. So the system itself is about <strong>5%</strong>
         written — and the parts that carry every promise on this page (permissions you grant, a record
         you can read, the power to revoke) are four and five milestones away. None of it exists yet.</p>
       <p class="small">The honest summary: <strong>the factory works, the product barely started.</strong>
@@ -281,10 +282,18 @@ footer { border-top:var(--rule-w) solid var(--rule); padding-block:2.4rem 3.2rem
         can check accumulating faster than anyone can review it.</p>
     </div>
 
-    <p class="small">What the process has done so far, since it started running: <strong>36 independent
-      verdicts</strong> across five submissions, <strong>234 findings</strong> of which 7 were serious
-      enough to block a merge, <strong>3 of 5 changes refused</strong>. Most of those findings were not
-      in the kernel — they were in the machinery, and in the claims its author made about it.</p>
+    <p class="small">What the process has done so far, since it started running: <strong>50 independent
+      verdicts</strong> across ten submissions, <strong>281 findings</strong> of which 10 were serious
+      enough to block a merge, and <strong>only 2 changes merged</strong>. Most of those findings were
+      not in the kernel — they were in the machinery, and in the claims its author made about it.</p>
+
+    <p class="small">The record keeps its own failures too. Of the fifteen entries in the permanent
+      ledger, <strong>eight are governance defects</strong> and every one is the process failing at
+      itself: a judge handed a description of the work that was false in both halves, thirteen commit
+      messages destroyed while cleaning up a fourth, a tool that reissued an identifier belonging to a
+      change already judged, and a mitigating sentence written into a record of its own mistake. Each
+      was found by a judge. None was found by a check. They are in the ledger because a system that
+      records only its successes is a brochure.</p>
   </div>
 </section>
 

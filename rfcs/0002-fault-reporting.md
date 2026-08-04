@@ -149,7 +149,13 @@ register values, which are facts about the machine.
 **Corrected after review.** An earlier revision said those values are "chosen by this design and not
 by a caller". They are parameters. Whether a caller can choose them is a question about who can call
 the function, not about what the function does with what it receives — and with `fault_stop` public,
-a caller could choose all of them. `pub(super)` is what makes the sentence true; the sentence was
+a caller could choose all of them.
+**Withdrawn.** `pub(super)` makes no sentence true. A reviewer declared
+`extern "C" { #[link_name = "<v0-mangled symbol>"] fn f(..); }` in a portable file and reached
+`fault_stop` with arguments of its own choosing, through a build that passes clippy `-D warnings` and
+the full constitution check. `#[link_name]` reaches any symbol in the binary and nothing in the
+language, the lints or CI closes it. Visibility confines accidents and idioms; it has never confined
+intent. See `fail.rs`, which now records all three versions of this claim and why each was false.
 doing work the visibility had not yet done.
 
 ### 5. Where the authority comes from

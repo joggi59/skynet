@@ -281,12 +281,27 @@ where execution happened to be rather than what caused it. The report should say
 and this RFC does not specify that text. Left to the implementer with a `REVIEW:` criterion rather
 than guessed at here.
 
-**O-9.** `IN_FAILURE` lives in `.bss`, immediately below `.stack`, so a stack overflow overwrites the
+**O-9.** *(partly addressed — the harm is now visible, the cause is not fixed.)*
+
+`IN_FAILURE` lives in `.bss`, immediately below `.stack`, so a stack overflow overwrites the
 re-entrancy flag before it overwrites anything else — and a set flag turns the first genuine fault
 into a silent halt, which is the failure this whole RFC exists to remove. The `0xa5` pattern lowers
 the probability and changes nothing structural. Without an MMU there is no guard page and no way to
 make the stack's overflow land somewhere harmless. This belongs with the MMU part of M1, and whoever
 builds it should treat an unmapped page below the stack as a requirement rather than a nicety.
+
+What shipped instead changes the *consequence* rather than the cause. The re-entrancy path no longer
+halts in silence: it writes `SKYNET_REFAULT` to the UART — no stack, address built with a single
+`movz`, TXFF polled so a full FIFO drops nothing — and then issues PSCI SYSTEM_OFF. A corrupted
+guard byte therefore turns the first genuine fault into a machine that stops and says why, instead
+of a machine that stops. `ci/boot-test.sh` has its own top-level check for the marker, because the
+shutdown is clean and exits 0 exactly like a successful boot.
+
+Measured, with `qemu -d int`, on the case review built: wild SP plus one `udf` took **2,328,136
+exceptions in six seconds and printed nothing**; it now takes **three** — the fault, the re-fault,
+and the `hvc` that stops the machine — and prints `SKYNET_REFAULT`. Review's own fix measured two,
+because it ended in a `wfi` loop; the third exception is the price of exiting instead of hanging,
+and a hang is what a timeout cannot distinguish from a hardware failure.
 
 **O-3.** Nothing writes `VBAR_EL1` for a second core. Secondary cores are parked at M0 and brought up
 at M2; whoever does that must install vectors per core before releasing one. Recorded so it is a

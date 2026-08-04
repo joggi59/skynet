@@ -65,6 +65,7 @@ criteria = [
     "the boot test must distinguish a fault taken during a failure from a clean boot: both exit 0 through PSCI, so it needs its own marker and its own top-level check. That check belongs on main under the orchestrator, NOT on this branch — ci/ is in does_not_touch and no acceptance criterion may authorise its own violation",
     "PROOF: a panic raised part-way through the fault report must not hang. It reached fail_stop with the flag already set, whose already-failing branch halted in a wfi loop — measured as a truncated report, thirty seconds of silence and exit 124. Show it exiting by itself",
     "the re-entrancy flag must be COMPARED to its pattern, not tested non-zero. .bss sits directly below .stack, so an overflow writes the flag first; under a non-zero test a stray byte costs the next genuine fault its report",
+    "PROOF: the emergency path's OWN device access must not storm. Point its UART base at unmapped space so its first access aborts, inject a wild SP plus udf, and show a machine-level exception trace bounded at three. Note honestly that the third end is a wfi loop and QEMU exits 124",
     "REVIEW: the emergency path in the vector table writes the PL011 and issues PSCI while holding neither, because it has no stack to hold them with. It is a device-access site that no grep for constructors can see. Say so in the RFC, or do not add it",
     "ci/constitution-check.sh --check hal-boundary passes",
     "ci/constitution-check.sh --check no-kernel-deps passes",

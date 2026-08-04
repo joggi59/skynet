@@ -168,15 +168,51 @@ the machine off, with the HAL check passing. The hole did not close; it widened,
 `fail_stop`'s `'static` bound had reduced portable-reachable output to zero bits of runtime state and
 this restored it.
 
-The RFC answered *which module holds the constructor call* — true, and `exception.rs` mints nothing —
+The RFC answered *which module holds the constructor call* — true when written, and no longer the
+whole answer (see "The third device-access site" below) —
 and presented that as an answer to a question about *reachability*. It was not. `fault_stop` is
 `pub(super)`, the idiom already used two files away, and the claim narrows to what visibility
 actually delivers.
 
 This matters more than it looks. `reviewer-constitution` found that C-0003 closed the constructor
 reach-around and left `Failure::fail_stop` reachable from portable code — the hole moved rather than
-closing. Adding a second minting site in `exception.rs` would move it again. One module mints; that
-claim stays true, and this RFC does not weaken it.
+closing. Adding a second *constructor* call in `exception.rs` would move it again. One module
+constructs devices, and that remains true. It is not the same claim as "one module reaches devices",
+which this RFC does weaken — deliberately, and the next section is the accounting.
+
+## The third device-access site
+
+`exception.rs`'s vector table reaches two devices without holding either. When an exception arrives
+while the kernel is already failing, the entry forms the PL011 base with a single `movz`, writes the
+data register directly, and then issues PSCI `SYSTEM_OFF` with an immediate function ID. No
+`BootConsole`, no `PowerControl`, no constructor call — and therefore invisible to
+`check_minting_sites`, which greps for constructors.
+
+Four earlier statements in this document said no such site was added. They were written before the
+emergency path existed and were not revised when it did, which is worse than an error: the RFC's
+hash is pinned into the append-only ledger, so a false design record outlives the design.
+
+**Why the path cannot hold a capability.** It runs with no stack. A `BootConsole` cannot be
+constructed without one, and the whole reason this path exists is that the fault being reported may
+*be* the stack — that is the case review measured at 2,328,136 exceptions. Anything that needs a
+frame to report a broken frame reports nothing.
+
+**What it costs at M4.** Every other authority in the kernel becomes a capability the holder was
+handed. This one cannot: it is assembly, the address is an immediate in the instruction stream, and
+there is no holder to hand anything to. When capabilities arrive, this is the site that will need an
+argument rather than a mechanism — most likely that the vector table is part of the trusted computing
+base by construction, since it is the code the processor branches to whether or not anyone granted it
+anything. That argument is not made here. It is recorded as owed.
+
+**What contains it meanwhile.** It is reachable only with `IN_FAILURE` already set, which only the
+vector entry and `fail_stop` write; it writes a fixed sixteen-byte string from `.rodata` and cannot
+be made to write anything else; and its last instruction stops the machine. It is not a console. It
+is a sixteen-byte epitaph.
+
+**O-10.** `check_minting_sites` greps for constructor names and is therefore blind to this path, and
+to any raw MMIO write from any file — review demonstrated the same blindness from a portable one.
+Counting constructors was never the invariant; reaching a device is. The check needs to look for the
+address, not the name.
 
 The guard covers both entries. A fault inside `fault_stop` reaches the guard and halts, which is
 precisely the storm `reviewer-safety` measured and the gap it flagged in the C-0003 guard.
@@ -224,7 +260,9 @@ contract defined by its only implementation is not a contract.
 `nano`'s 192 KiB with 191 bytes used, comfortable — and it is the first contribution to spend real
 budget, which is worth watching rather than waving through.
 
-**Invariant 1, no ambient authority (pending, M4).** No new minting site. The handler routes through
+**Invariant 1, no ambient authority (pending, M4).** No new *constructor* call, and one new
+device-access site that holds nothing — the stackless emergency path, accounted for above and
+recorded as owed at M4. The handler routes through
 `fail.rs`. The `IN_FAILURE` guard's scope widens from "the panic path" to "the failure path", which
 is what it should have been.
 
@@ -247,7 +285,7 @@ boot marker uses. No outward path exists to carry it anywhere.
    the defect `reviewer-safety` measured at 10.2 million exceptions per four seconds; show the number
    is now one
 7. `ci/constitution-check.sh --check hal-boundary` and `--check no-kernel-deps` pass
-8. `REVIEW:` no new device-minting site exists; `grep` for the constructors still finds two call
+8. `REVIEW:` no new device *constructor* call exists; `grep` for the constructors still finds two call
    sites, both in `fail.rs`
 9. `REVIEW:` the hex formatter cannot itself fault — no indexing that can go out of bounds, no
    arithmetic that can overflow under `overflow-checks`

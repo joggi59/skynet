@@ -258,6 +258,63 @@ check_minting_sites() {
 # governance/, roadmap/, rfcs/ and forge/ directly, and it may not put a byte of
 # kernel/ on main except by merging a contribution the gate approved.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# No judge is named next to a verdict in anything a judge reads.
+#
+# governance/SEPARATION_OF_POWERS.md states this rule and lists the artefacts it
+# covers. It has now been broken three times, twice after being written down:
+# commit messages naming a verdict while the rest of the panel was still
+# deliberating, and a task file carrying "guardian-1 rejected C-0005 over it" in
+# a comment beside the field it explained.
+#
+# Every instance was caught by a judge. None was caught by anything mechanical,
+# and a rule enforced only by the party it constrains is a preference.
+#
+# The check is deliberately narrow. It looks at contribution-scoped artefacts —
+# task files, and the commit messages on a contribution branch — because those
+# are what a judge reads ABOUT THE CONTRIBUTION IT IS RULING ON. Governance
+# documents and the ledger name judges and verdicts constantly, and must: the
+# ledger IS the published record, and this file's own comment above would trip a
+# broader rule. Scope, not vocabulary, is what separates the record from the leak.
+# ---------------------------------------------------------------------------
+check_panel_leak() {
+    heading "No judge named beside a verdict in a contribution's own artefacts"
+
+    local judges='guardian-[0-9]+|reviewer-(safety|conformance|constitution)'
+    local verdicts='approv|reject|refus|dissent|verdict|blocking finding'
+    local found=0
+
+    # 1. Task files. Read by every judge, and versioned, so a leak outlives the
+    #    panel that it contaminated.
+    local hits
+    hits=$(grep -rniE "($judges)" tasks/ 2>/dev/null | grep -iE "($verdicts)" || true)
+    if [ -n "$hits" ]; then
+        fail "a task file names a judge beside a verdict"
+        while IFS= read -r h; do detail "$h"; done <<< "$hits"
+        found=1
+    fi
+
+    # 2. Commit messages on contribution branches. The first instance of this
+    #    leak was here, and `git log` is the first thing a judge runs.
+    local br
+    for br in $(git for-each-ref --format='%(refname:short)' 'refs/heads/task/*' 2>/dev/null); do
+        local msgs
+        msgs=$(git log --format='%h %s%n%b' "main..$br" 2>/dev/null \
+               | grep -niE "($judges)" | grep -iE "($verdicts)" || true)
+        [ -n "$msgs" ] || continue
+        fail "commit messages on $br name a judge beside a verdict"
+        while IFS= read -r m; do detail "$m"; done <<< "$msgs"
+        found=1
+    done
+
+    if [ "$found" -eq 0 ]; then
+        pass "no judge attributed in a task file or a contribution branch's history"
+        detail "the record belongs in .provenance/ledger.jsonl, where every judge is named on purpose"
+    else
+        detail "describe the defect; do not attribute it. SEPARATION_OF_POWERS.md — the repository is inside the room"
+    fi
+}
+
 check_kernel_provenance() {
     heading "The kernel reaches main only through the gate"
     if ! git rev-parse --verify main >/dev/null 2>&1; then
@@ -478,6 +535,7 @@ run_all() {
     check_vector_alignment
     check_minting_sites
     check_kernel_provenance
+    check_panel_leak
     check_hal_boundary
     check_no_kernel_deps
     check_english
@@ -509,6 +567,7 @@ main() {
                 vector-alignment) check_vector_alignment ;;
                 minting-sites)   check_minting_sites ;;
                 kernel-provenance) check_kernel_provenance ;;
+                panel-leak)      check_panel_leak ;;
                 zero-telemetry)  check_pending_invariant "zero_telemetry" 5 "M6" \
                                      "no outbound path can be verified absent before a network stack exists" ;;
                 electorate)      check_pending_invariant "agents_do_not_vote" 9 "G3" \

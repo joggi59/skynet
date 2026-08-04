@@ -14,6 +14,15 @@ use crate::hal;
 /// will do it at M4.
 pub struct BootConsole {
     base: *mut u8,
+    /// Set once the poll budget has been spent without the FIFO moving.
+    ///
+    /// The budget is per CONSOLE, not per byte. Per byte it multiplies: review
+    /// measured a ~160-byte fault report taking 24.2 seconds against a 30-second
+    /// CI timeout with a stuck FIFO — the contribution had only measured the
+    /// 15-byte boot marker, at 0.14 seconds, and drew the wrong conclusion from
+    /// it. A FIFO that has not moved in a million reads will not move for the
+    /// next byte, and asking again once per byte turns one stall into a hundred.
+    stuck: bool,
 }
 
 impl BootConsole {
@@ -54,7 +63,7 @@ impl BootConsole {
     /// "only the boot path creates devices" a property of the language instead
     /// of an item on a review checklist.
     pub(super) const unsafe fn new(base: usize) -> Self {
-        Self { base: base as *mut u8 }
+        Self { base: base as *mut u8, stuck: false }
     }
 }
 
@@ -66,6 +75,9 @@ impl hal::Console for BootConsole {
     /// port it printed its own messages on. Writing a configuration sequence
     /// nobody can test against real hardware is not something M0 should do.
     fn write(&mut self, bytes: &[u8]) {
+        if self.stuck {
+            return;
+        }
         for &byte in bytes {
             // SAFETY:
             //
@@ -108,10 +120,11 @@ impl hal::Console for BootConsole {
                 while read_volatile(fr) & Self::FR_TXFF != 0 {
                     budget -= 1;
                     if budget == 0 {
-                        // Abandon the whole write, not just this byte. A FIFO
-                        // that has not moved in a million reads will not move
-                        // for the next byte either, and spending the budget
-                        // again per byte turns one stall into a hundred.
+                        // Give up on this console, not just on this write. See
+                        // the field's comment: the alternative is one stall per
+                        // byte, which is what turned a bounded poll into
+                        // twenty-four seconds of a thirty-second budget.
+                        self.stuck = true;
                         return;
                     }
                 }

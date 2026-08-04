@@ -200,7 +200,7 @@ const _: () = assert!(
 /// carried a private copy of the marker string, the console poll and the PSCI
 /// call — 124 bytes of the 128 available, with no room for any of the four
 /// defects review then found. They are shared functions in `.text` now, reached
-/// by a branch, and an entry is 60 bytes.
+/// by a branch, and an entry is 84 bytes.
 ///
 /// 128 bytes is a hard limit the assembler will not warn about: overflow one and
 /// the next entry starts in the middle of your code. `link.ld` asserts it.
@@ -217,32 +217,55 @@ pub(super) unsafe extern "C" fn vector_table() -> ! {
         // revision stored it before comparing and could demote a lower rung back
         // to a higher one, which lets two states oscillate forever.
         //
-        // x0 carries the guard's address into every shared path. It is not an
-        // argument in any sense the language knows about; it is why those
-        // functions are `unsafe extern "C"` and unreachable from Rust.
+        // x0 holds the guard's address only for this entry's own use. It used to
+        // be carried into the shared paths as an implicit argument they stored
+        // through — which meant a `#[link_name]` caller chose that pointer, and
+        // no such pointer existed before the paths were split out. The advance
+        // is issued here now; the paths take nothing.
+        // The whole ladder lives HERE, in `.vectors`, and nothing else does.
+        //
+        // The rungs used to advance the guard with their own first instructions,
+        // and those instructions are in `.text` — the region this layout does
+        // NOT protect. Review zeroed memory down to 0x40080810, leaving the
+        // guard and the whole table verifiably intact, took one fault, and got
+        // 3,813,734 exceptions with an empty console: vector entry, first byte
+        // of the emergency path, repeat. The bound was true of the ladder and
+        // not of the machine, which is the same shape of defect the ladder was
+        // built to close, one level down.
+        //
+        // Every advance is now issued from the entry, which the processor
+        // branches to and which sits in the section the layout protects. The
+        // functions it branches to hold no state and write nothing.
         ".macro ENTRY, idx",
         "  adr  x0, {guard}",
         "  ldr  w1, [x0]",
 
+        // Rung four. Nothing to advance to; nothing to write.
         "  movz w2, #{silent_lo}",
         "  movk w2, #{silent_hi}, lsl #16",
         "  cmp  w1, w2",
         "  b.eq {terminal}",
 
-        "  movz w2, #{stopping_lo}",
-        "  movk w2, #{stopping_hi}, lsl #16",
-        "  cmp  w1, w2",
-        "  b.eq {quiet}",
-
-        "  movz w2, #{failing_lo}",
-        "  movk w2, #{failing_hi}, lsl #16",
-        "  cmp  w1, w2",
-        "  b.eq {emergency}",
-
-        // Not failing. Claim the first rung and take the normal report path.
+        // Rung three: the marker path faulted. Advance to SILENT, stop quietly.
+        "  movz w3, #{stopping_lo}",
+        "  movk w3, #{stopping_hi}, lsl #16",
+        "  cmp  w1, w3",
+        "  b.ne 1f",
         "  str  w2, [x0]",
-        "  mov  x0, #\\idx",
-        "  b    {handler}",
+        "  b    {quiet}",
+
+        // Rung two: the report faulted. Advance to STOPPING, print the marker.
+        "1: movz w2, #{failing_lo}",
+        "   movk w2, #{failing_hi}, lsl #16",
+        "   cmp  w1, w2",
+        "   b.ne 2f",
+        "   str  w3, [x0]",
+        "   b    {emergency}",
+
+        // Rung one: not failing. Claim it and take the full report path.
+        "2: str  w2, [x0]",
+        "   mov  x0, #\\idx",
+        "   b    {handler}",
         ".endm",
 
         ".align 7", "ENTRY 0",
@@ -286,18 +309,16 @@ pub(super) unsafe extern "C" fn vector_table() -> ! {
 /// TXFF is BOUNDED — see [`BootConsole::POLL_BUDGET`](super::pl011::BootConsole).
 ///
 /// # Safety
-/// Reached only by a branch from a vector entry, with x0 holding the guard's
-/// address and the guard reading [`FAILING`](super::fail::FAILING). Never
-/// returns. Not callable from Rust and not meant to be.
+/// Reached by a branch from a vector entry, which has already advanced the
+/// ladder to `STOPPING`. Takes nothing and writes no memory but the UART.
+///
+/// Not "uncallable from Rust" — an earlier version of this comment said that
+/// of these three functions, having just withdrawn the identical claim about
+/// two others forty lines away. `#[link_name]` reaches any symbol.
 #[unsafe(naked)]
+#[unsafe(link_section = ".failpath")]
 unsafe extern "C" fn emergency_report() -> ! {
     naked_asm!(
-        // Claim rung three BEFORE touching a device, so a fault in anything
-        // below lands on `quiet_stop` rather than back here.
-        "  movz w2, #{stopping_lo}",
-        "  movk w2, #{stopping_hi}, lsl #16",
-        "  str  w2, [x0]",
-
         "  movz x1, #{uart_hi}, lsl #16",
         "  adr  x3, 30f",
         // The per-byte budget. A UART that answers and never drains is not
@@ -331,8 +352,6 @@ unsafe extern "C" fn emergency_report() -> ! {
         txff_bit    = const super::pl011::BootConsole::FR_TXFF.trailing_zeros(),
         poll_lo     = const (super::pl011::BootConsole::POLL_BUDGET & 0xffff),
         poll_hi     = const (super::pl011::BootConsole::POLL_BUDGET >> 16),
-        stopping_lo = const (super::fail::STOPPING & 0xffff),
-        stopping_hi = const (super::fail::STOPPING >> 16),
     )
 }
 
@@ -344,21 +363,20 @@ unsafe extern "C" fn emergency_report() -> ! {
 /// what a three-rung ladder did, and why there are four.
 ///
 /// # Safety
-/// As [`emergency_report`]: reached only from a vector entry or from that
-/// function, x0 holding the guard's address. Never returns.
+/// Reached from a vector entry or from `emergency_report`. Takes nothing.
+///
+/// Not "uncallable from Rust" — an earlier version of this comment said that
+/// of these three functions, having just withdrawn the identical claim about
+/// two others forty lines away. `#[link_name]` reaches any symbol.
 #[unsafe(naked)]
+#[unsafe(link_section = ".failpath")]
 unsafe extern "C" fn quiet_stop() -> ! {
     naked_asm!(
-        "  movz w2, #{silent_lo}",
-        "  movk w2, #{silent_hi}, lsl #16",
-        "  str  w2, [x0]",
         "  movz x0, #{psci_off_lo}",
         "  movk x0, #{psci_off_hi}, lsl #16",
         "  hvc  #0",
         "  b    {terminal}",
         terminal     = sym terminal_stop,
-        silent_lo    = const (super::fail::SILENT & 0xffff),
-        silent_hi    = const (super::fail::SILENT >> 16),
         psci_off_lo  = const (super::psci::PSCI_SYSTEM_OFF & 0xffff),
         psci_off_hi  = const ((super::psci::PSCI_SYSTEM_OFF >> 16) & 0xffff),
     )
@@ -371,8 +389,14 @@ unsafe extern "C" fn quiet_stop() -> ! {
 /// reaching it means three earlier attempts to say something all faulted.
 ///
 /// # Safety
-/// Reached only from a vector entry or from [`quiet_stop`]. Never returns.
+/// Reached from a vector entry or from `quiet_stop`. Takes nothing, reads
+/// nothing, writes nothing.
+///
+/// Not "uncallable from Rust" — an earlier version of this comment said that
+/// of these three functions, having just withdrawn the identical claim about
+/// two others forty lines away. `#[link_name]` reaches any symbol.
 #[unsafe(naked)]
+#[unsafe(link_section = ".failpath")]
 unsafe extern "C" fn terminal_stop() -> ! {
     naked_asm!("1: wfi", "   b 1b")
 }

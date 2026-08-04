@@ -37,11 +37,18 @@ SECTIONS
      * What this buys, exactly, and what it does not.
      *
      * It buys DISTANCE against an overflow that descends a frame at a time:
-     * about 2.9 KiB of `.rodata` and `.text` that must be destroyed first. Three
-     * judges measured the same threshold independently. Below ~2,916 bytes of
-     * overrun the machine reports the fault and exits 0; between 2,948 and 2,984
-     * it exits 0 saying nothing; from ~2,992 it storms — 3,895,448 exceptions at
-     * 4,000 bytes, empty console, exit 124. That threshold IS this distance.
+     * about 2.9 KiB of `.rodata` and `.text` that must be destroyed before
+     * anything the failure path needs is touched. Measured against the ordering
+     * this replaced, where the guard sat directly beneath the stack: the same
+     * gradual overflow gave between 2.2 and 4.0 million exceptions with an empty
+     * console and exit 124, and gives three exceptions and a clean stop here.
+     *
+     * The exact threshold is NOT stated, and an earlier version of this comment
+     * stated one. A probe that writes downward destroys its own loop before it
+     * reaches the depth it was asked for, so every depth past that point
+     * measures the same event — the numbers such a probe reports are its own
+     * address, not the parameter. Whoever needs the real threshold must write a
+     * probe whose writing code cannot be destroyed by its own writes.
      *
      * It buys NOTHING against a single frame larger than the distance. A 4 KiB
      * local array steps over `.text`, `.failpath` and `.guard` in one instruction
@@ -120,8 +127,8 @@ SECTIONS
      * ci/constitution-check.sh measures this too, but a CI check has to find the
      * section before it can measure it: rename the input section and the check
      * reports SKIP with exit 0 while the table sits where the hardware reads it
-     * as the middle of _start. reviewer-safety demonstrated exactly that,
-     * including that build, clippy and the boot test all still pass.
+     * as the middle of _start. Review demonstrated exactly that, including that
+     * build, clippy and the boot test all still pass.
      *
      * ASSERT cannot fail open. If .vectors is absent its address is 0, which is
      * 2 KiB aligned — so the size is asserted too. */
@@ -141,6 +148,11 @@ SECTIONS
      *
      * Fifteen padded entries plus a final unpadded one is at most 16 * 128. One
      * oversized entry anywhere puts the total above it. */
+    /* Slack, stated because a bound nobody has measured against is a bound
+     * nobody knows the distance to. Measured at the time of writing — objdump
+     * first, sentence second, which is the order this file's history says was
+     * not followed: an entry is 92 bytes of the 128 available, 36 spare, and
+     * the table 2,012 of 2,048, 36 spare. Whoever spends it should say so here. */
     ASSERT(SIZEOF(.vectors) <= 0x800,
            "a vector entry exceeds 128 bytes: the table's stride has doubled and every fault will name the wrong slot")
 

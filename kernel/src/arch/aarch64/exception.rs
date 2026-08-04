@@ -240,30 +240,40 @@ pub(super) unsafe extern "C" fn vector_table() -> ! {
         "  adr  x0, {guard}",
         "  ldr  w1, [x0]",
 
-        // Rung four. Nothing to advance to; nothing to write.
+        // Rung four, INSIDE the entry. Two instructions, no branch out.
+        //
+        // It used to be a function in `.failpath`, and the entry branched to it
+        // — so an image with `.failpath` destroyed and the guard and all sixteen
+        // entries provably intact still stormed: 442,394 exceptions per second,
+        // empty console, exit 124. Third time in this file that the thing
+        // deciding was protected and the thing executing was not. The end of the
+        // ladder cannot depend on any memory but the entry the processor is
+        // already executing.
         "  movz w2, #{silent_lo}",
         "  movk w2, #{silent_hi}, lsl #16",
         "  cmp  w1, w2",
-        "  b.eq {terminal}",
+        "  b.ne 1f",
+        "9: wfi",
+        "   b    9b",
 
         // Rung three: the marker path faulted. Advance to SILENT, stop quietly.
-        "  movz w3, #{stopping_lo}",
-        "  movk w3, #{stopping_hi}, lsl #16",
-        "  cmp  w1, w3",
-        "  b.ne 1f",
-        "  str  w2, [x0]",
-        "  b    {quiet}",
+        "1: movz w3, #{stopping_lo}",
+        "   movk w3, #{stopping_hi}, lsl #16",
+        "   cmp  w1, w3",
+        "   b.ne 2f",
+        "   str  w2, [x0]",
+        "   b    {quiet}",
 
         // Rung two: the report faulted. Advance to STOPPING, print the marker.
-        "1: movz w2, #{failing_lo}",
+        "2: movz w2, #{failing_lo}",
         "   movk w2, #{failing_hi}, lsl #16",
         "   cmp  w1, w2",
-        "   b.ne 2f",
+        "   b.ne 3f",
         "   str  w3, [x0]",
         "   b    {emergency}",
 
         // Rung one: not failing. Claim it and take the full report path.
-        "2: str  w2, [x0]",
+        "3: str  w2, [x0]",
         "   mov  x0, #\\idx",
         "   b    {handler}",
         ".endm",
@@ -291,7 +301,6 @@ pub(super) unsafe extern "C" fn vector_table() -> ! {
         handler     = sym exception_entry,
         emergency   = sym emergency_report,
         quiet       = sym quiet_stop,
-        terminal    = sym terminal_stop,
         guard       = sym super::fail::IN_FAILURE,
         failing_lo  = const (super::fail::FAILING & 0xffff),
         failing_hi  = const (super::fail::FAILING >> 16),
@@ -363,7 +372,9 @@ unsafe extern "C" fn emergency_report() -> ! {
 /// what a three-rung ladder did, and why there are four.
 ///
 /// # Safety
-/// Reached from a vector entry or from `emergency_report`. Takes nothing.
+/// Reached from a vector entry or from `emergency_report`. Takes nothing, and
+/// advances nothing — the entry did that before branching here. An earlier
+/// version of this comment said the function claimed a rung.
 ///
 /// Not "uncallable from Rust" — an earlier version of this comment said that
 /// of these three functions, having just withdrawn the identical claim about
@@ -375,28 +386,12 @@ unsafe extern "C" fn quiet_stop() -> ! {
         "  movz x0, #{psci_off_lo}",
         "  movk x0, #{psci_off_hi}, lsl #16",
         "  hvc  #0",
-        "  b    {terminal}",
-        terminal     = sym terminal_stop,
+        // PSCI SYSTEM_OFF does not return. If it ever does, stop here rather
+        // than branch anywhere — there is nothing left that can be trusted.
+        "1: wfi",
+        "   b    1b",
         psci_off_lo  = const (super::psci::PSCI_SYSTEM_OFF & 0xffff),
         psci_off_hi  = const ((super::psci::PSCI_SYSTEM_OFF >> 16) & 0xffff),
     )
 }
 
-/// Rung four: the end that cannot itself fault.
-///
-/// Two instructions, no memory access, no device, no `hvc`. Everything above it
-/// can go wrong; this cannot. It is also the only rung that says nothing, and
-/// reaching it means three earlier attempts to say something all faulted.
-///
-/// # Safety
-/// Reached from a vector entry or from `quiet_stop`. Takes nothing, reads
-/// nothing, writes nothing.
-///
-/// Not "uncallable from Rust" — an earlier version of this comment said that
-/// of these three functions, having just withdrawn the identical claim about
-/// two others forty lines away. `#[link_name]` reaches any symbol.
-#[unsafe(naked)]
-#[unsafe(link_section = ".failpath")]
-unsafe extern "C" fn terminal_stop() -> ! {
-    naked_asm!("1: wfi", "   b 1b")
-}

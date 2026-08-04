@@ -268,6 +268,20 @@ t_contribution_submit() {
     # reviewing C-0002, which chased the mismatch to ground before ruling.
     #
     # Piped, not substituted: no shell variable touches the bytes.
+    # Pin the BRANCH HEAD too, not only the specification.
+    #
+    # A reviewer judging C-0005 noticed the worktree changing underneath it —
+    # uncommitted rewrites of the very files it was measuring — and protected
+    # itself by taking every measurement from clean `git archive` extractions of
+    # the committed tree. That is the reviewer compensating for a process defect,
+    # which is not a control.
+    #
+    # Verdicts describe a tree. If the tree moves after they are cast, they
+    # describe something that no longer exists. The gate compares this against
+    # the branch it is about to merge and refuses if they differ.
+    local branch_sha=""
+    branch_sha=$(git rev-parse "$branch" 2>/dev/null)
+
     local task_sha=""
     task_sha=$(git show "$branch:tasks/active/$task.toml" 2>/dev/null | sha256sum | cut -d' ' -f1)
     if [ -z "$task_sha" ] || [ "$task_sha" = "$(printf '' | sha256sum | cut -d' ' -f1)" ]; then
@@ -285,6 +299,7 @@ objective   = "$objective"
 agent       = "$agent"
 model       = "$model"
 branch      = "$branch"
+branch_sha  = "$branch_sha"
 prompt_hash = "$phash"
 signature   = ""
 EOF

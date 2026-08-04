@@ -46,6 +46,7 @@ load_contribution() {
     C_MODEL=$(toml_get     "$dir/contribution.toml" "d['contribution']['model']")
     C_BRANCH=$(toml_get    "$dir/contribution.toml" "d['contribution']['branch']")
     C_PROMPT_HASH=$(toml_get "$dir/contribution.toml" "d['contribution'].get('prompt_hash','')")
+    C_BRANCH_SHA=$(toml_get "$dir/contribution.toml" "d['contribution'].get('branch_sha','')")
     C_SIGNATURE=$(toml_get "$dir/contribution.toml" "d['contribution'].get('signature','')")
 
     # Where the mechanical conditions must run.
@@ -79,6 +80,16 @@ cond_boot()   { heading "4. Boot";        _absorb ci/boot-test.sh; }
 cond_budgets(){ heading "5. Budgets";     _absorb ci/build.sh --size; }
 cond_hal()    { heading "6. HAL boundary";_absorb ci/constitution-check.sh --check hal-boundary; }
 cond_deps()   { heading "7. Dependencies";_absorb ci/constitution-check.sh --check no-kernel-deps; }
+
+# Checks that existed and that nothing could fail a merge over.
+#
+# reviewer-constitution measured it: "--check minting-sites is invoked by nothing
+# that can fail a merge", and separately that a committed rewrite of the ledger
+# passes because the gate never runs the append-only check. A check the gate does
+# not run is documentation.
+cond_authority() { heading "6b. Authority minting";  _absorb ci/constitution-check.sh --check minting-sites; }
+cond_ledger()    { heading "10b. Ledger append-only"; _absorb ci/constitution-check.sh --check provenance; }
+cond_kprov()     { heading "10c. Kernel provenance";  _absorb ci/constitution-check.sh --check kernel-provenance; }
 
 # Run a sub-check in the contribution's worktree, echo its per-check lines, and
 # fold its tallies into ours. The sub-scripts already speak PASS/FAIL/PENDING;
@@ -213,6 +224,28 @@ cond_guardian() {
 cond_provenance() {
     heading "10. Provenance"
     local ok=1
+
+    # The verdicts describe a tree. If the branch moved after they were cast,
+    # they describe something that no longer exists.
+    #
+    # A reviewer caught this happening — the worktree was being rewritten while
+    # it measured — and defended itself by working from clean extractions of the
+    # committed tree. A judge protecting itself from the party assembling its
+    # brief is not a control, so this is one.
+    if [ -n "${C_BRANCH_SHA:-}" ]; then
+        local now; now=$(git rev-parse "$C_BRANCH" 2>/dev/null)
+        if [ "$now" != "$C_BRANCH_SHA" ]; then
+            fail "the branch moved after this contribution was submitted"
+            detail "submitted: ${C_BRANCH_SHA:0:12}"
+            detail "now:       ${now:0:12}"
+            detail "every verdict was cast on a tree that no longer exists — resubmit"
+            ok=0
+        else
+            info "branch unchanged since submission (${now:0:12})"
+        fi
+    else
+        info "no branch pin — recorded before this check existed"
+    fi
     for field in C_TASK C_OBJECTIVE C_AGENT C_MODEL C_BRANCH; do
         if [ -z "${!field:-}" ]; then
             fail "provenance field ${field#C_} is empty"
@@ -460,8 +493,8 @@ run_all() {
     info "branch $C_BRANCH"
 
     cond_build; cond_lint; cond_tests; cond_boot
-    cond_budgets; cond_hal; cond_deps
-    cond_reviewers; cond_guardian; cond_provenance
+    cond_budgets; cond_hal; cond_deps; cond_authority
+    cond_reviewers; cond_guardian; cond_provenance; cond_ledger; cond_kprov
 
     echo
     if [ "$CHECKS_FAIL" -gt 0 ]; then
@@ -494,7 +527,9 @@ main() {
                      case "$2" in
                         build) cond_build ;; lint) cond_lint ;; tests) cond_tests ;;
                         boot) cond_boot ;; budgets) cond_budgets ;; hal) cond_hal ;;
-                        deps) cond_deps ;; reviewers) cond_reviewers ;;
+                        deps) cond_deps ;; authority) cond_authority ;;
+                        ledger) cond_ledger ;; kernel-provenance) cond_kprov ;;
+                        reviewers) cond_reviewers ;;
                         guardian) cond_guardian ;; provenance) cond_provenance ;;
                         *) die "unknown condition '$2' (try --list)" ;;
                      esac

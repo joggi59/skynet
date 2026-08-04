@@ -20,9 +20,10 @@ source "$(dirname "${BASH_SOURCE[0]}")/../../ci/lib.sh"
 cd "$REPO_ROOT" || die "cannot enter repo root"
 
 TOOLS="$REPO_ROOT/forge/mcp/tools.toml"
-FORGE_DIR="$REPO_ROOT/.forge/contributions"
+[ -n "$FORGE_ROOT" ] || die "not inside a git repository — the forge has no state directory"
+FORGE_DIR="$FORGE_ROOT/.forge/contributions"
 WORKTREES="$REPO_ROOT/.worktrees"
-LEDGER="$REPO_ROOT/.provenance/ledger.jsonl"
+LEDGER="$FORGE_ROOT/.provenance/ledger.jsonl"
 JSON=0
 
 # Strip --json from the argument list wherever it appears.
@@ -236,10 +237,20 @@ t_contribution_submit() {
     objective=$(echo "$tf" | python3 -c "import tomllib,sys;print(tomllib.loads(sys.stdin.read())['task'].get('objective',''))")
     rfc=$(echo "$tf"       | python3 -c "import tomllib,sys;print(tomllib.loads(sys.stdin.read())['task'].get('rfc',''))")
 
+    # Allocate past the HIGHEST existing identifier, not past the count.
+    #
+    # Counting assumes the set is dense and starts at one. Both held until they
+    # did not, and the failure is silent in the worst possible way: the record a
+    # panel has already ruled on is overwritten by a new submission wearing its
+    # number, and every verdict in it now describes a different patch.
     local n id
-    n=$(( $(ls -1 "$FORGE_DIR" 2>/dev/null | grep -c '^C-' || true) + 1 ))
+    n=$(( $(ls -1 "$FORGE_DIR" 2>/dev/null | sed -n 's/^C-0*\([0-9][0-9]*\)$/\1/p' \
+            | sort -n | tail -1 || true) + 1 ))
     id=$(printf 'C-%04d' "$n")
     local dir="$FORGE_DIR/$id"
+    # Refuse rather than overwrite. Belt and braces: if the arithmetic above is
+    # ever wrong again, this is what stops it from costing a panel's work.
+    [ -e "$dir" ] && die "contribution $id already exists at $dir — refusing to overwrite a judged record"
     mkdir -p "$dir/verdicts" "$dir/evidence"
 
     # Pin the specification by CONTENT, not by number.

@@ -281,7 +281,17 @@ check_panel_leak() {
     heading "No judge named beside a verdict in a contribution's own artefacts"
 
     local judges='guardian-[0-9]+|reviewer-(safety|conformance|constitution)'
-    local verdicts='approv|reject|refus|dissent|verdict|blocking finding'
+    # Vocabulary, and the reason it is this wide.
+    #
+    # The first version matched approv|reject|refus|dissent|verdict|blocking
+    # finding, and PASSED on a branch carrying seven attributions — because the
+    # messages wrote bare severity labels: "BLOCKING, from reviewer-constitution
+    # and independently from guardian-3", "MAJOR, from reviewer-safety". None of
+    # those words appear. A two-word phrase like "blocking finding" is a
+    # near-miss waiting to happen; the word alone is the signal.
+    #
+    # Two judges found the seven lines this missed. The check reported PASS.
+    local verdicts='approv|reject|refus|dissent|verdict|blocking|major|minor|finding|flagged|raised'
     local found=0
 
     # 1. Task files. Read by every judge, and versioned, so a leak outlives the

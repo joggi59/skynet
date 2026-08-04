@@ -2,7 +2,7 @@
 
 //! The failure path, and the only place outside `boot_rust` that mints a device.
 
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use crate::hal::{self, Console, Power};
 
@@ -16,7 +16,7 @@ use super::psci::PowerControl;
 ///
 /// # Why it exists
 ///
-/// Without it, `fail_stop` can re-enter itself without limit. Review reproduced
+/// Without it, `fail_stop` can re-enter itself without limit. This was reproduced
 /// this rather than arguing it: one overflowing addition in the console write
 /// path, with `overflow-checks = true`, sends the panic handler into `fail_stop`,
 /// whose write overflows, which panics, which calls `fail_stop` again. The
@@ -30,8 +30,7 @@ use super::psci::PowerControl;
 ///
 /// # What it costs
 ///
-/// Zero statics was a property three judges and two reviewers verified and
-/// valued: the evidence that ownership is doing at M0 what a capability will do
+/// Zero statics was a property this project had and valued: the evidence that ownership is doing at M0 what a capability will do
 /// at M4. This spends it, deliberately, and the claim narrows honestly to "one
 /// static, in the failure path, and here is why it earns its place".
 ///
@@ -42,8 +41,8 @@ use super::psci::PowerControl;
 /// reached outside the panic path." All three clauses were made false by the
 /// lines directly beneath them, in the patch that wrote them.
 ///
-/// It is `pub(super)`, not module-private. It is an `AtomicU8` holding one of
-/// three values, not a flag. All sixteen vector entries read it and write it, on
+/// It is `pub(super)`, not module-private. It is an `AtomicU32` holding one of
+/// four values, not a flag. All sixteen vector entries read it and write it, on
 /// every exception, panic or no panic — `exception.rs` takes it by `sym`. And
 /// its effect is no longer to halt: it selects between reporting the fault,
 /// printing a sixteen-byte marker and stopping the machine, and stopping dead
@@ -51,30 +50,70 @@ use super::psci::PowerControl;
 ///
 /// It still grants no authority, and that clause was true. The rest was
 /// bookkeeping that outlived what it described.
-pub(super) static IN_FAILURE: AtomicU8 = AtomicU8::new(0);
+///
+/// # Where it lives, and why that is a link-time property
+///
+/// Its own `.guard` section, placed below `.text` at the bottom of the image.
+/// It used to be the only thing in `.bss`, directly beneath the stack, so a
+/// stack overflow destroyed it before it destroyed anything else — and the
+/// overflow kept going into the vector table itself. Review measured 1,495,553
+/// exceptions in three seconds with an empty console, the trace showing an
+/// undefined instruction taken AT vector entry 4. `link.ld` now asserts the
+/// order rather than describing it.
+#[unsafe(link_section = ".guard")]
+pub(super) static IN_FAILURE: AtomicU32 = AtomicU32::new(0);
 
-/// The value that means "a failure is already in progress".
-///
-/// A pattern rather than a bit, and the reason is not elegance. `.bss` sits
-/// immediately below `.stack`, so a stack overflow overwrites this byte before
-/// it overwrites anything else — and review demonstrated an overflow setting it,
-/// turning the first genuine fault into a silent halt. One byte of pattern makes
-/// an accidental set less likely; it does not make it impossible. The structural
-/// answer is a guard page, which needs the MMU. RFC-0002, O-9.
-pub(super) const FAILING: u8 = 0xa5;
+// What `Relaxed` assumes here, since it is not obvious and is not free.
+//
+// This word is read and written from two places the compiler cannot relate: one
+// relaxed atomic load in Rust, and plain `ldr`/`str` in the vector table's naked
+// assembly, which LLVM does not see at all. `Relaxed` orders nothing, and no
+// stronger ordering would help — an acquire on the Rust side has nothing to
+// synchronise with, because the assembly side issues no release.
+//
+// What makes it correct is not ordering, it is that there is one observer. M1 is
+// a single core with interrupts masked, and the only way control reaches the
+// assembly reader is a synchronous exception on the same core — which cannot
+// interleave with a load, only follow it. The word is naturally aligned and the
+// accesses are single-copy atomic by the architecture, so no reader can see a
+// half-written value.
+//
+// Every clause of that expires at the second core, and it expires in the unsafe
+// direction: two cores failing at once would race here with nothing to stop
+// them. Whoever brings up the second core owns this comment.
 
-/// The value that means "the emergency path is already running".
+// Why a word of pattern rather than a byte.
+//
+// The byte version cost one value in 256 total silence. The vector entry tests
+// the most degraded state first, and that test was `cmp w1, #0x5a` — so a guard
+// corrupted to exactly `0x5a` sent the FIRST genuine fault to the dead stop.
+// Review measured it: one exception, no console output at all, no PSCI, exit
+// 124. The three-state ladder bought a bound and sold a chance of silence, and
+// nothing recorded the trade.
+//
+// Four bytes with the halves inverted means no single-byte corruption can
+// produce any state, and a random word hits one with probability 3 in 2^32.
+// That is not a guarantee — nothing here is, without an MMU — but it moves the
+// failure from "plausible" to "not worth the arithmetic".
+
+/// A failure is in progress and its report has not finished.
+pub(super) const FAILING: u32 = 0xa5a5_5a5a;
+
+/// The failure path faulted. Print a fixed marker, stop the machine.
 ///
-/// A third state, not a second flag. [`FAILING`] bounds re-entry into the fault
-/// *report*; nothing bounded re-entry into the emergency path itself, which ends
-/// in an unconditional `hvc`. A fault raised between the marker and that `hvc`
-/// re-entered, found `FAILING`, and ran the emergency path again — with the same
-/// ending, and the same fault available to happen again.
+/// [`FAILING`] bounds re-entry into the fault report; this bounds re-entry into
+/// the path that prints the marker, which ends in an unconditional `hvc`.
+pub(super) const STOPPING: u32 = 0x5a5a_a5a5;
+
+/// The marker path faulted too. Stop the machine without touching a device.
 ///
-/// The vector entry writes this before it touches a device, so a third exception
-/// stops dead without reaching one. Three entries, then silence: the only end
-/// that cannot itself fault.
-pub(super) const STOPPING: u8 = 0x5a;
+/// The rung that was missing. With three states the dead stop was a bare `wfi`,
+/// so a machine that got there exited 124 and looked exactly like a hang; and if
+/// it had instead tried PSCI, a fault in the `hvc` would have come back to the
+/// same state and tried again forever. A fourth value lets each rung do strictly
+/// less than the one above and still say something, with [`TERMINAL`] below it
+/// as the end that touches nothing at all.
+pub(super) const SILENT: u32 = 0x3c3c_c3c3;
 
 /// Stop the machine. The failure path's only PSCI constructor call.
 ///
@@ -98,16 +137,13 @@ unsafe fn stop() -> ! {
 /// The failure path's console. Its only PL011 constructor call.
 ///
 /// # Safety
-/// As for [`stop`], and additionally: this aliases a console owned elsewhere.
-/// Sound only because the kernel has already failed and no other owner will run
-/// again, so the aliasing cannot race with anything. `UART0_BASE` is the
-/// platform console's base, which satisfies `BootConsole::new`'s precondition.
+/// As for [`stop`], and additionally: this aliases the console `boot.rs` handed
+/// to `kernel_main`.
 unsafe fn console() -> BootConsole {
     // SAFETY: `UART0_BASE` is the platform console's base, which is
-    // `BootConsole::new`'s precondition. The aliasing with the console `boot.rs`
-    // handed to `kernel_main` is sound only because every caller has already
-    // failed and never returns, so the other holder is provably dead and no race
-    // is possible.
+    // `BootConsole::new`'s precondition. The aliasing is sound because every
+    // caller has already failed and none returns, so the other holder is
+    // provably dead and no race is possible.
     unsafe { BootConsole::new(platform::UART0_BASE) }
 }
 
@@ -128,8 +164,8 @@ unsafe fn console() -> BootConsole {
 ///   - "both are `pub(super)` or narrower" — false; `fail_stop` is a public
 ///     trait method, because `#[panic_handler]` must reach it and the language
 ///     offers nothing else.
-///   - "`fault_stop` is unreachable from portable Rust" — false. A reviewer
-///     booted the counter-example: a file with no `asm!`, no `core::arch`, no
+///   - "`fault_stop` is unreachable from portable Rust" — false, and the
+///     counter-example was booted: a file with no `asm!`, no `core::arch`, no
 ///     `target_arch` and no constructor call declares
 ///     `extern "C" { #[link_name = "<the v0-mangled symbol>"] fn f(..); }` and
 ///     puts 192 bits of its own choosing on the operator's console, then powers
@@ -151,64 +187,43 @@ unsafe fn console() -> BootConsole {
 /// the containment is the review, and the review is these paragraphs being wrong
 /// in public rather than right in private.
 ///
-/// Both are behind the same re-entrancy guard, and neither returns. The earlier wording — "one function, one caller,
-/// one compile-time constant" — was written when there was one, and was still
-/// there when there were two.
+/// Both are behind the same re-entrancy guard, and neither returns.
 ///
-/// What would turn it into a global console — and must not be allowed to:
-/// returning instead of diverging, gaining a receiver, acquiring a second call
-/// site, or being handed anything other than a compile-time constant. The
-/// `'static` bound on its argument now enforces the last of those.
+/// What would turn it into a global console: returning instead of diverging,
+/// gaining a receiver, acquiring a second call site, or being handed anything
+/// other than a compile-time constant.
+///
+/// The `'static` bound narrows the last of those and does not enforce it — an
+/// earlier version of this sentence said "now enforces", which is the same
+/// mistake as the containment claim above. A `#[link_name]` extern declares
+/// whatever signature it likes and the bound is not there to be checked.
 pub struct Failure;
 
 impl hal::FailStop for Failure {
     unsafe fn fail_stop(bytes: &'static [u8]) -> ! {
-        // A load and a store, NOT `swap`.
+        // Load and store, not `swap`; compare before storing; store only on
+        // the path that continues.
         //
-        // `swap` compiles to `ldxrb`/`stxrb` — an exclusive-monitor pair. The
-        // MMU is off, so this memory is Device-nGnRnE, and the architecture does
-        // not guarantee exclusive monitors work on Device memory. A `stxrb` that
-        // never succeeds is an infinite retry loop in the first four
-        // instructions of the handler whose entire purpose is to stop an
-        // infinite loop. Found at machine level by reviewer-safety.
+        // `swap` compiles to `ldxr`/`stxr`, an exclusive-monitor pair. The MMU
+        // is off, so this is Device-nGnRnE memory, and the architecture does not
+        // guarantee exclusive monitors work there. A `stxr` that never succeeds
+        // is an infinite retry loop in the first instructions of the handler
+        // whose entire purpose is to stop an infinite loop.
         //
-        // Load-then-store is not atomic, and does not need to be here: M1 is
-        // single-core with no interrupts enabled, so no second observer exists
-        // to race with. That argument expires the moment either changes, and it
-        // expires in the safe direction — `swap` becomes correct once the MMU is
-        // on and this memory is Normal, which is the same milestone that brings
-        // the second core.
-        // Read, then set, BEFORE anything that can fault.
+        // The observer that matters is not a second core. It is THIS core taking
+        // a synchronous exception, which DAIF does not mask — so the hazard is
+        // re-entrancy, not concurrency, and an earlier justification here
+        // ("single-core, no interrupts") was the wrong argument for the right
+        // code. Anything faultable placed between the load and the store widens
+        // the window: one revision let the compiler put stack traffic there and
+        // a fault injected into the gap gave 2,733,246 exceptions.
         //
-        // The window between the two is the whole guard. An earlier revision put
-        // the store after the load but let the compiler place stack traffic
-        // between them; reviewer-safety injected a fault into that gap and
-        // counted 2,733,246 exceptions. The guard was correct and the window was
-        // the bug.
-        //
-        // The observer that matters here is not another core — it is THIS core
-        // taking a synchronous exception, which DAIF does not mask. That is why
-        // the earlier justification ("single-core, no interrupts") was the wrong
-        // argument for the right code: it reasoned about concurrency for a
-        // re-entrancy guard.
-        //
-        // Load and store, not `swap`: `swap` needs an exclusive monitor, and
-        // with the MMU off this is Device-nGnRnE memory where the architecture
-        // does not guarantee one.
-        // Compared against FAILING, not against zero.
-        //
-        // Testing `!= 0` made the pattern decorative: any stray byte counted as
-        // "already failing", which is the wrong direction. `.bss` sits directly
-        // below `.stack`, so a stack overflow writes this byte before it writes
-        // anything else — and under `!= 0` the next GENUINE fault would then read
-        // a corrupted flag as re-entry and print a bare marker instead of a
-        // report. Under `== FAILING` it reads as not-failing and reports
-        // properly, which is the answer that helps. On a real re-entry the byte
-        // was written by this code microseconds earlier and nothing ran in
-        // between, so the equality holds exactly when it should.
+        // Comparing rather than testing non-zero is what keeps a corrupted word
+        // from reading as re-entry and costing a genuine fault its report.
+        // Storing only on the continuing path is what stops this function
+        // demoting a lower rung back to a higher one — see the ladder above.
         let already = IN_FAILURE.load(Ordering::Relaxed);
-        IN_FAILURE.store(FAILING, Ordering::Relaxed);
-        if already == FAILING {
+        if already == FAILING || already == STOPPING || already == SILENT {
             // Already failing. Do not touch the console: the previous entry may
             // have been interrupted mid-write, and whatever panicked will panic
             // again if asked to do the same work.
@@ -225,6 +240,7 @@ impl hal::FailStop for Failure {
             // site.
             unsafe { stop() }
         }
+        IN_FAILURE.store(FAILING, Ordering::Relaxed);
 
         // SAFETY: the kernel has already failed and this function never returns,
         // so no other owner of the PL011 or of PSCI will run again and the
@@ -265,16 +281,22 @@ impl Failure {
     /// # Why this writes runtime data when `fail_stop` may not
     ///
     /// `fail_stop` takes `&'static [u8]` because a panic message is program text
-    /// that could contain anything a future author puts there. A fault report is
-    /// register values — facts about the machine, chosen by this code and not by
-    /// a caller. Different data, different argument, and the second does not
-    /// license the first.
+    /// that could contain anything a future author puts there. This takes
+    /// register values.
+    ///
+    /// An earlier version added that those values are "facts about the machine,
+    /// chosen by this code and not by a caller". That is false in the same way
+    /// the containment claim above was false: `#[link_name]` reaches this
+    /// function from portable code and the caller chooses all four arguments.
+    /// The difference between the two functions is what the TYPE permits, and
+    /// that is the whole of it — one takes a `'static` slice, this one takes
+    /// four integers. Neither is a statement about who calls.
     ///
     /// # Safety
     /// Callable only from an exception vector. Aliases a console owned
     /// elsewhere, sound only because the kernel has already failed and no other
     /// code will run again.
-    /// `pub(super)`, not `pub`. Two judges compiled the counter-example against
+    /// `pub(super)`, not `pub`. The counter-example was compiled against
     /// the previous revision: `Failure` is re-exported at crate scope, `Slot`
     /// being private does not help because `None` needs no name, and portable
     /// code could therefore put 160 bits of its own choosing on the operator's

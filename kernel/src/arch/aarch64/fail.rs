@@ -35,9 +35,22 @@ use super::psci::PowerControl;
 /// at M4. This spends it, deliberately, and the claim narrows honestly to "one
 /// static, in the failure path, and here is why it earns its place".
 ///
-/// It grants no authority. Its only reachable effect is to halt instead of
-/// recurse; it carries no information, cannot be read outside this module, and
-/// cannot be reached outside the panic path.
+/// # What it is now, which is not what this comment used to say
+///
+/// It used to read: "its only reachable effect is to halt instead of recurse; it
+/// carries no information, cannot be read outside this module, and cannot be
+/// reached outside the panic path." All three clauses were made false by the
+/// lines directly beneath them, in the patch that wrote them.
+///
+/// It is `pub(super)`, not module-private. It is an `AtomicU8` holding one of
+/// three values, not a flag. All sixteen vector entries read it and write it, on
+/// every exception, panic or no panic — `exception.rs` takes it by `sym`. And
+/// its effect is no longer to halt: it selects between reporting the fault,
+/// printing a sixteen-byte marker and stopping the machine, and stopping dead
+/// without touching a device.
+///
+/// It still grants no authority, and that clause was true. The rest was
+/// bookkeeping that outlived what it described.
 pub(super) static IN_FAILURE: AtomicU8 = AtomicU8::new(0);
 
 /// The value that means "a failure is already in progress".
@@ -49,6 +62,19 @@ pub(super) static IN_FAILURE: AtomicU8 = AtomicU8::new(0);
 /// an accidental set less likely; it does not make it impossible. The structural
 /// answer is a guard page, which needs the MMU. RFC-0002, O-9.
 pub(super) const FAILING: u8 = 0xa5;
+
+/// The value that means "the emergency path is already running".
+///
+/// A third state, not a second flag. [`FAILING`] bounds re-entry into the fault
+/// *report*; nothing bounded re-entry into the emergency path itself, which ends
+/// in an unconditional `hvc`. A fault raised between the marker and that `hvc`
+/// re-entered, found `FAILING`, and ran the emergency path again — with the same
+/// ending, and the same fault available to happen again.
+///
+/// The vector entry writes this before it touches a device, so a third exception
+/// stops dead without reaching one. Three entries, then silence: the only end
+/// that cannot itself fault.
+pub(super) const STOPPING: u8 = 0x5a;
 
 /// Stop the machine. The failure path's only PSCI constructor call.
 ///
@@ -62,6 +88,10 @@ pub(super) const FAILING: u8 = 0xa5;
 /// Reachable only after the kernel has failed, on a path that never returns, at
 /// EL1 where the HVC conduit is valid.
 unsafe fn stop() -> ! {
+    // SAFETY: `PowerControl::new`'s precondition is EL1, where the HVC conduit
+    // is valid; `boot.rs` parks the core anywhere else, so reaching this line at
+    // all establishes it. The constructor's "at most once" clause is met because
+    // every caller has already failed and none of them returns.
     unsafe { PowerControl::new() }.off()
 }
 
@@ -73,6 +103,11 @@ unsafe fn stop() -> ! {
 /// again, so the aliasing cannot race with anything. `UART0_BASE` is the
 /// platform console's base, which satisfies `BootConsole::new`'s precondition.
 unsafe fn console() -> BootConsole {
+    // SAFETY: `UART0_BASE` is the platform console's base, which is
+    // `BootConsole::new`'s precondition. The aliasing with the console `boot.rs`
+    // handed to `kernel_main` is sound only because every caller has already
+    // failed and never returns, so the other holder is provably dead and no race
+    // is possible.
     unsafe { BootConsole::new(platform::UART0_BASE) }
 }
 
@@ -83,19 +118,38 @@ unsafe fn console() -> BootConsole {
 /// writes a compile-time constant, and [`Failure::fault_stop`] for hardware
 /// faults, which writes register values.
 ///
-/// `fault_stop` is `pub(super)`. `fail_stop` is NOT — it is a public trait
-/// method, because `#[panic_handler]` must be able to reach it and the language
-/// gives the panic handler nothing else. An earlier version of this comment said
-/// "both are `pub(super)` or narrower", which was false, and was written to
-/// correct a previous overstatement. reviewer-constitution compiled a portable
-/// probe through `fail_stop` and put its own bytes on the console.
+/// # Neither function is contained, and this comment has claimed otherwise
+/// three times
 ///
-/// What is actually true: `fault_stop` is unreachable from portable Rust,
-/// `fail_stop` is reachable but constrained to a `&'static [u8]`, and neither is
-/// containment — the same reviewer noted that portable code can write to the
-/// console with a raw pointer and has been able to since M0. Visibility confines
-/// idiomatic code. It was never a boundary against someone determined, and this
-/// comment should not have implied it was.
+/// The record, because the pattern matters more than any one sentence:
+///
+///   - "one function, one caller, one compile-time constant" — written when
+///     there was one, still there when there were two.
+///   - "both are `pub(super)` or narrower" — false; `fail_stop` is a public
+///     trait method, because `#[panic_handler]` must reach it and the language
+///     offers nothing else.
+///   - "`fault_stop` is unreachable from portable Rust" — false. A reviewer
+///     booted the counter-example: a file with no `asm!`, no `core::arch`, no
+///     `target_arch` and no constructor call declares
+///     `extern "C" { #[link_name = "<the v0-mangled symbol>"] fn f(..); }` and
+///     puts 192 bits of its own choosing on the operator's console, then powers
+///     the machine off. Build, clippy `-D warnings` and the full constitution
+///     check all pass.
+///
+/// Each correction was careful and each was replaced by a narrower claim that
+/// was also false. So the claim is withdrawn rather than narrowed again:
+///
+/// **No visibility modifier in Rust contains anything.** `#[link_name]` reaches
+/// any symbol present in the binary, whatever `pub` says about it, and there is
+/// no attribute, lint or CI grep that closes that. `pub(super)` stops an
+/// accident and an idiom. It has never stopped an intent, and a comment that
+/// implies it does is worse than no comment — it invites the next reader to rely
+/// on it.
+///
+/// What would actually contain these: capabilities at M4, where reaching a
+/// device requires holding something rather than naming something. Until then
+/// the containment is the review, and the review is these paragraphs being wrong
+/// in public rather than right in private.
 ///
 /// Both are behind the same re-entrancy guard, and neither returns. The earlier wording — "one function, one caller,
 /// one compile-time constant" — was written when there was one, and was still

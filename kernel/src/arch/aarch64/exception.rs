@@ -213,29 +213,47 @@ pub(super) unsafe extern "C" fn vector_table() -> ! {
         // 256 bytes of stack in a path that is about to stop. RFC-0002 O-1
         // records that a stack-overflow fault pushes further into whatever is
         // below; fixing that properly needs the MMU and belongs with it.
-        // The entry sets the failure flag BEFORE it touches anything, and
-        // writes no stack at all.
+        // The entry writes no stack, and decides what to do before it touches
+        // anything at all.
         //
-        // An earlier revision pushed x0-x30 first and consulted the guard
-        // eighteen faultable stores later. A fault whose cause is a bad stack
-        // pointer therefore looped here forever: review measured 2,328,136
-        // exceptions in six seconds with no console output. The frame was also
-        // write-only — nothing ever read it, though the design said the report
-        // did.
+        // Three states, because two were not enough. `FAILING` bounds re-entry
+        // into the fault report; nothing bounded re-entry into the emergency path
+        // below, which ends in an unconditional `hvc`. `STOPPING` is written
+        // before that path reaches a device, so a third exception stops dead
+        // without reaching one.
         //
-        // Ten instructions. Because the entry sets the flag, `fault_stop` must
-        // not check it again: checking twice would halt on the first fault and
-        // print nothing.
+        // An earlier revision pushed x0-x30 first and consulted the flag eighteen
+        // faultable stores later, so a fault whose cause was the stack looped here
+        // forever — 2,328,136 exceptions in six seconds with no console output.
+        // The frame was also write-only; nothing ever read it, though the design
+        // said the report did.
+        //
+        // Because the entry writes the flag, `fault_stop` must not check it:
+        // checking twice would halt on the first fault and print nothing.
         ".macro ENTRY, idx",
         "  adrp x0, {guard}",
         "  add  x0, x0, #:lo12:{guard}",
         "  ldrb w1, [x0]",
-        "  mov  w2, #{failing}",
-        "  strb w2, [x0]",
-        // Compared, not merely tested non-zero: a stray byte in .bss must not
-        // read as re-entry and cost a real fault its report. See fail.rs.
+        // Three tests, in this order, before anything is written.
+        //
+        // Compared, not tested non-zero: a stray byte in .bss must not read as
+        // re-entry and cost a real fault its report. And STOPPING is tested
+        // FIRST, because it is the state in which no device may be touched — a
+        // third exception must reach the dead stop without passing through the
+        // path that writes the UART.
+        //
+        // The flag is written only on the path that continues. An earlier
+        // revision stored FAILING unconditionally before comparing, which turned
+        // the third exception's STOPPING back into FAILING and let the two states
+        // oscillate: report, emergency, report, emergency. Caught by reading the
+        // disassembly, after the edit that was supposed to prevent it silently
+        // failed to apply.
+        "  cmp  w1, #{stopping}",
+        "  b.eq 25f",
         "  cmp  w1, #{failing}",
         "  b.eq 20f",
+        "  mov  w2, #{failing}",
+        "  strb w2, [x0]",
         "  mov  x0, #\\idx",
         "  b    {handler}",
         // Already failing. Say so on the console, then stop.
@@ -246,7 +264,11 @@ pub(super) unsafe extern "C" fn vector_table() -> ! {
         // fault into nothing at all. Sixteen bytes and no stack: the address is
         // built with `movz`, the string is read with a post-indexed `ldrb`, and
         // TXFF is polled so a full FIFO drops nothing.
-        "20: movz x1, #{uart_hi}, lsl #16",
+        // x0 still holds the flag's address. Claim the emergency path before
+        // reaching a device, so a fault inside it lands on the dead stop.
+        "20: mov  w2, #{stopping}",
+        "    strb w2, [x0]",
+        "    movz x1, #{uart_hi}, lsl #16",
         "    adr  x0, 23f",
         "21: ldrb w2, [x0], #1",
         "    cbz  w2, 24f",
@@ -263,8 +285,10 @@ pub(super) unsafe extern "C" fn vector_table() -> ! {
         "24: movz x0, #{psci_off_lo}",
         "    movk x0, #{psci_off_hi}, lsl #16",
         "    hvc  #0",
-        // Unreachable — PSCI SYSTEM_OFF does not return. If it ever does, the
-        // machine is beyond diagnosis and this is the only safe end.
+        // Reached two ways: PSCI SYSTEM_OFF returning, which it does not; and a
+        // third exception, whose entry found STOPPING and came straight here
+        // without touching a device. Both mean the machine is beyond diagnosis,
+        // and this is the only end that cannot itself fault.
         "25: wfi",
         "    b    25b",
         ".endm",
@@ -292,6 +316,7 @@ pub(super) unsafe extern "C" fn vector_table() -> ! {
         handler = sym exception_entry,
         guard    = sym super::fail::IN_FAILURE,
         failing  = const super::fail::FAILING,
+        stopping = const super::fail::STOPPING,
         uart_hi  = const (super::platform::UART0_BASE >> 16),
         dr_off   = const super::pl011::BootConsole::DR,
         fr_off   = const super::pl011::BootConsole::FR,

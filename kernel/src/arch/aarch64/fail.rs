@@ -4,9 +4,8 @@
 
 use core::sync::atomic::{AtomicU8, Ordering};
 
-use crate::hal::{self, Console, Cpu, Power};
+use crate::hal::{self, Console, Power};
 
-use super::cpu::Processor;
 use super::exception::{class_name, elr_is_indicative_only, far_is_meaningful, Slot};
 use super::hex;
 use super::pl011::BootConsole;
@@ -50,6 +49,32 @@ pub(super) static IN_FAILURE: AtomicU8 = AtomicU8::new(0);
 /// an accidental set less likely; it does not make it impossible. The structural
 /// answer is a guard page, which needs the MMU. RFC-0002, O-9.
 pub(super) const FAILING: u8 = 0xa5;
+
+/// Stop the machine. The failure path's only PSCI constructor call.
+///
+/// Three places in this module end by powering off, and each used to construct
+/// its own `PowerControl`. Three identical constructions with three copies of
+/// the same safety argument is three chances for one of them to drift, and it
+/// makes the minting count grow every time the failure path gains a branch —
+/// a count `ci/constitution-check.sh` reads as a ratchet.
+///
+/// # Safety
+/// Reachable only after the kernel has failed, on a path that never returns, at
+/// EL1 where the HVC conduit is valid.
+unsafe fn stop() -> ! {
+    unsafe { PowerControl::new() }.off()
+}
+
+/// The failure path's console. Its only PL011 constructor call.
+///
+/// # Safety
+/// As for [`stop`], and additionally: this aliases a console owned elsewhere.
+/// Sound only because the kernel has already failed and no other owner will run
+/// again, so the aliasing cannot race with anything. `UART0_BASE` is the
+/// platform console's base, which satisfies `BootConsole::new`'s precondition.
+unsafe fn console() -> BootConsole {
+    unsafe { BootConsole::new(platform::UART0_BASE) }
+}
 
 /// The platform's fail-stop.
 ///
@@ -116,13 +141,35 @@ impl hal::FailStop for Failure {
         // Load and store, not `swap`: `swap` needs an exclusive monitor, and
         // with the MMU off this is Device-nGnRnE memory where the architecture
         // does not guarantee one.
+        // Compared against FAILING, not against zero.
+        //
+        // Testing `!= 0` made the pattern decorative: any stray byte counted as
+        // "already failing", which is the wrong direction. `.bss` sits directly
+        // below `.stack`, so a stack overflow writes this byte before it writes
+        // anything else — and under `!= 0` the next GENUINE fault would then read
+        // a corrupted flag as re-entry and print a bare marker instead of a
+        // report. Under `== FAILING` it reads as not-failing and reports
+        // properly, which is the answer that helps. On a real re-entry the byte
+        // was written by this code microseconds earlier and nothing ran in
+        // between, so the equality holds exactly when it should.
         let already = IN_FAILURE.load(Ordering::Relaxed);
         IN_FAILURE.store(FAILING, Ordering::Relaxed);
-        if already != 0 {
+        if already == FAILING {
             // Already failing. Do not touch the console: the previous entry may
             // have been interrupted mid-write, and whatever panicked will panic
-            // again if asked to do the same work. Stop here.
-            Processor::halt()
+            // again if asked to do the same work.
+            //
+            // Stop the machine rather than halt it. `Processor::halt()` here was
+            // a `wfi` loop, so a panic raised inside `fault_stop` produced a
+            // truncated report and then thirty seconds of silence and exit 124 —
+            // measured. The vector table's equivalent path was changed to stop
+            // the machine and this one was not, which left the two ends of the
+            // same guard behaving differently for no reason anyone chose.
+            //
+            // SAFETY: the kernel has failed, this never returns, and EL1 is where
+            // the HVC conduit is valid. Same constructor, same module, no new
+            // site.
+            unsafe { stop() }
         }
 
         // SAFETY: the kernel has already failed and this function never returns,
@@ -131,11 +178,11 @@ impl hal::FailStop for Failure {
         // console's base, which satisfies `BootConsole::new`'s precondition; the
         // "at most once" clause is met in substance because the other holder is
         // provably dead, and the guard above makes it true of this function too.
-        let mut console = unsafe { BootConsole::new(platform::UART0_BASE) };
+        let mut console = unsafe { console() };
         console.write(bytes);
         // SAFETY: as above — reached only after the kernel has failed, from a
         // path that never returns, at EL1 where the HVC conduit is valid.
-        unsafe { PowerControl::new() }.off()
+        unsafe { stop() }
     }
 }
 
@@ -146,8 +193,16 @@ impl Failure {
     /// minting through the same call. This is deliberate and is the reason the
     /// fault path lives in this module rather than in `exception.rs`: review
     /// found that closing the constructor reach-around left `fail_stop` itself
-    /// reachable — the hole moved rather than closing. A second minting site
-    /// would move it again. One module mints devices, and that claim stays true.
+    /// reachable — the hole moved rather than closing. A second constructor call
+    /// would move it again. One module CONSTRUCTS devices, and that stays true.
+    ///
+    /// It is not the same claim as "one module reaches devices", and that one is
+    /// now false. The vector table's emergency path writes the PL011 and issues
+    /// PSCI directly, holding neither, because it has no stack to hold them with
+    /// — see RFC-0002, "The third device-access site". An earlier version of this
+    /// comment said "one module mints devices, and that claim stays true" while
+    /// the file two directories away said "it writes the UART directly", in the
+    /// same patch.
     ///
     /// The guard covers a fault raised from inside this function, which is the
     /// storm review measured at 10,262,934 exceptions in four seconds and the
@@ -183,7 +238,7 @@ impl Failure {
         // SAFETY: as for `fail_stop` — the kernel has failed, this never
         // returns, and the guard above makes the "at most once" clause true of
         // this function too.
-        let mut console = unsafe { BootConsole::new(platform::UART0_BASE) };
+        let mut console = unsafe { console() };
         let mut put = |b: u8| console.write(&[b]);
 
         put(b'\n');
@@ -250,6 +305,6 @@ impl Failure {
 
         // SAFETY: as above — after a failure, on a path that never returns, at
         // EL1 where the HVC conduit is valid.
-        unsafe { PowerControl::new() }.off()
+        unsafe { stop() }
     }
 }

@@ -58,7 +58,10 @@ criteria = [
     "PROOF: a fault injected inside fault_stop itself halts on the guard. Review measured 10,262,934 exceptions in four seconds without it — show the count is now one report, or none, and a halt",
     "PROOF: a fault whose cause is the STACK — a wild SP plus an undefined instruction — must not storm. Review measured 2,328,136 exceptions in six seconds with the guard placed inside fault_stop, because the vector entry pushed a 256-byte frame before reaching it. Show the count with a machine-level exception trace, and show the machine stopped by itself rather than by the timeout",
     "PROOF: the vector table's own detents refuse. Show the link failing on an entry over 128 bytes (which doubles the stride and makes every slot name wrong), on a missing entry, and on a UART base the emergency path's movz cannot form",
-    "the boot test must distinguish a fault taken during a failure from a clean boot: both exit 0 through PSCI, so it needs its own marker and its own top-level check",
+    "the boot test must distinguish a fault taken during a failure from a clean boot: both exit 0 through PSCI, so it needs its own marker and its own top-level check. That check belongs on main under the orchestrator, NOT on this branch — ci/ is in does_not_touch and no acceptance criterion may authorise its own violation",
+    "PROOF: a panic raised part-way through the fault report must not hang. It reached fail_stop with the flag already set, whose already-failing branch halted in a wfi loop — measured as a truncated report, thirty seconds of silence and exit 124. Show it exiting by itself",
+    "the re-entrancy flag must be COMPARED to its pattern, not tested non-zero. .bss sits directly below .stack, so an overflow writes the flag first; under a non-zero test a stray byte costs the next genuine fault its report",
+    "REVIEW: the emergency path in the vector table writes the PL011 and issues PSCI while holding neither, because it has no stack to hold them with. It is a device-access site that no grep for constructors can see. Say so in the RFC, or do not add it",
     "ci/constitution-check.sh --check hal-boundary passes",
     "ci/constitution-check.sh --check no-kernel-deps passes",
     "grep for BootConsole::new and PowerControl::new finds call sites ONLY in fail.rs — the fault path must not add a minting site",
@@ -75,6 +78,8 @@ touches = [
     "kernel/src/arch/aarch64/boot.rs",
     "kernel/src/arch/aarch64/mod.rs",
     "kernel/src/arch/aarch64/link.ld",
+    "kernel/src/arch/aarch64/pl011.rs",  # register offsets raised to pub(super)
+    "kernel/src/arch/aarch64/psci.rs",   # the function ID, likewise
 ]
 does_not_touch = [
     "ci/                — the implementer may not edit the checks that judge it",

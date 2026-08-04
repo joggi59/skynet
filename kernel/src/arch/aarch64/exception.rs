@@ -230,9 +230,12 @@ pub(super) unsafe extern "C" fn vector_table() -> ! {
         "  adrp x0, {guard}",
         "  add  x0, x0, #:lo12:{guard}",
         "  ldrb w1, [x0]",
-        "  mov  w2, #0xa5",
+        "  mov  w2, #{failing}",
         "  strb w2, [x0]",
-        "  cbnz w1, 20f",
+        // Compared, not merely tested non-zero: a stray byte in .bss must not
+        // read as re-entry and cost a real fault its report. See fail.rs.
+        "  cmp  w1, #{failing}",
+        "  b.eq 20f",
         "  mov  x0, #\\idx",
         "  b    {handler}",
         // Already failing. Say so on the console, then stop.
@@ -288,6 +291,7 @@ pub(super) unsafe extern "C" fn vector_table() -> ! {
 
         handler = sym exception_entry,
         guard    = sym super::fail::IN_FAILURE,
+        failing  = const super::fail::FAILING,
         uart_hi  = const (super::platform::UART0_BASE >> 16),
         dr_off   = const super::pl011::BootConsole::DR,
         fr_off   = const super::pl011::BootConsole::FR,

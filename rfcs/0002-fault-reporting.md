@@ -63,8 +63,39 @@ and stop. Resumable faults arrive with the MMU, in a later part of M1, and will 
 entry sequence — one that saves and restores a full frame. Writing that now, untested, in a
 privileged path, is the mistake RFC-0001 closed O-3 over.
 
-The entry saves x0–x30 to the stack because the report reads them and because a half-saved frame is
-worse than none. It costs 256 bytes of stack in a path that is about to stop.
+**Corrected after review: the entry writes no stack at all, and sets the failure flag first.**
+
+An earlier revision had the entry push x0–x30 "because the report reads them". Review established
+that nothing reads them — the frame is write-only — and, more seriously, that the push happens
+*before* the re-entrancy guard is consulted, eighteen faultable stores upstream of it. A fault caused
+by a bad stack pointer therefore loops in the entry forever with the guard never reached. Measured:
+2,328,136 exceptions in six seconds, no console output, killed by timeout.
+
+The entry now does the opposite of what it did. Ten instructions, no stack access:
+
+```
+adrp x0, IN_FAILURE       ; test-and-set BEFORE touching anything
+add  x0, x0, #:lo12:IN_FAILURE
+ldrb w1, [x0]
+mov  w2, #0xa5
+strb w2, [x0]
+cbnz w1, 1f               ; already failing: stop, without a stack
+mov  x0, #<slot>
+b    exception_entry
+1:  wfi
+    b 1b
+```
+
+Two consequences worth stating. Because the entry sets the flag, `fault_stop` no longer checks it —
+checking twice would halt on the first fault and print nothing. And because the entry touches no
+stack, a fault whose cause *is* the stack cannot recurse here at all; it recurses at worst once, in
+the Rust handler's own prologue, where the flag is already set.
+
+The flag holds `0xa5` rather than a bit. That is a mitigation, not a fix, and it is worth being
+precise about which: `.bss` sits immediately below `.stack`, so a stack overflow writes over the flag
+before anything else — review demonstrated an overflow setting it and turning the *first* real fault
+into a silent halt. A one-byte pattern makes an accidental set less likely and does not make it
+impossible. The structural answer is a guard page, which needs the MMU. Recorded as O-9.
 
 ### 3. The report
 
@@ -249,6 +280,13 @@ to be worth doing properly. Recorded; it belongs with the MMU part of M1.
 where execution happened to be rather than what caused it. The report should say so for EC `0x2F`,
 and this RFC does not specify that text. Left to the implementer with a `REVIEW:` criterion rather
 than guessed at here.
+
+**O-9.** `IN_FAILURE` lives in `.bss`, immediately below `.stack`, so a stack overflow overwrites the
+re-entrancy flag before it overwrites anything else — and a set flag turns the first genuine fault
+into a silent halt, which is the failure this whole RFC exists to remove. The `0xa5` pattern lowers
+the probability and changes nothing structural. Without an MMU there is no guard page and no way to
+make the stack's overflow land somewhere harmless. This belongs with the MMU part of M1, and whoever
+builds it should treat an unmapped page below the stack as a requirement rather than a nicety.
 
 **O-3.** Nothing writes `VBAR_EL1` for a second core. Secondary cores are parked at M0 and brought up
 at M2; whoever does that must install vectors per core before releasing one. Recorded so it is a

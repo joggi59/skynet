@@ -193,135 +193,186 @@ const _: () = assert!(
 /// table where the hardware would read it as the middle of `_start`.
 /// `ci/constitution-check.sh --check vector-alignment` now measures the result.
 ///
-/// Each entry saves the registers it is about to clobber, loads its own index,
-/// and branches to the shared handler. Entries are kept to a handful of
-/// instructions because 128 bytes is a hard limit the assembler will not warn
-/// about — overflow one and the next entry simply starts in the middle of your
-/// code.
+/// Each entry reads the guard, decides which of four rungs it is on, and
+/// branches. Nothing else lives here.
 ///
-/// # Safety
+/// The emergency paths used to be inlined into the macro, so all sixteen entries
+/// carried a private copy of the marker string, the console poll and the PSCI
+/// call — 124 bytes of the 128 available, with no room for any of the four
+/// defects review then found. They are shared functions in `.text` now, reached
+/// by a branch, and an entry is 60 bytes.
 ///
-/// Not callable. This is a table of exception entry points, reached only by the
-/// processor taking an exception.
+/// 128 bytes is a hard limit the assembler will not warn about: overflow one and
+/// the next entry starts in the middle of your code. `link.ld` asserts it.
+///
 #[unsafe(naked)]
 #[unsafe(link_section = ".vectors")]
 pub(super) unsafe extern "C" fn vector_table() -> ! {
     naked_asm!(
-        // Each entry: make room for x0-x30, save the two registers the entry
-        // itself uses, save the rest, load the slot index, branch.
+        // The whole entry. Read the guard, pick a rung, branch.
         //
-        // 256 bytes of stack in a path that is about to stop. RFC-0002 O-1
-        // records that a stack-overflow fault pushes further into whatever is
-        // below; fixing that properly needs the MMU and belongs with it.
-        // The entry writes no stack, and decides what to do before it touches
-        // anything at all.
+        // The rungs are tested MOST DEGRADED FIRST, so that a machine already
+        // failing badly cannot be routed back into code that does more work.
+        // The guard is only written on the rung that continues — an earlier
+        // revision stored it before comparing and could demote a lower rung back
+        // to a higher one, which lets two states oscillate forever.
         //
-        // Three states, because two were not enough. `FAILING` bounds re-entry
-        // into the fault report; nothing bounded re-entry into the emergency path
-        // below, which ends in an unconditional `hvc`. `STOPPING` is written
-        // before that path reaches a device, so a third exception stops dead
-        // without reaching one.
-        //
-        // An earlier revision pushed x0-x30 first and consulted the flag eighteen
-        // faultable stores later, so a fault whose cause was the stack looped here
-        // forever — 2,328,136 exceptions in six seconds with no console output.
-        // The frame was also write-only; nothing ever read it, though the design
-        // said the report did.
-        //
-        // Because the entry writes the flag, `fault_stop` must not check it:
-        // checking twice would halt on the first fault and print nothing.
+        // x0 carries the guard's address into every shared path. It is not an
+        // argument in any sense the language knows about; it is why those
+        // functions are `unsafe extern "C"` and unreachable from Rust.
         ".macro ENTRY, idx",
-        "  adrp x0, {guard}",
-        "  add  x0, x0, #:lo12:{guard}",
-        "  ldrb w1, [x0]",
-        // Three tests, in this order, before anything is written.
-        //
-        // Compared, not tested non-zero: a stray byte in .bss must not read as
-        // re-entry and cost a real fault its report. And STOPPING is tested
-        // FIRST, because it is the state in which no device may be touched — a
-        // third exception must reach the dead stop without passing through the
-        // path that writes the UART.
-        //
-        // The flag is written only on the path that continues. An earlier
-        // revision stored FAILING unconditionally before comparing, which turned
-        // the third exception's STOPPING back into FAILING and let the two states
-        // oscillate: report, emergency, report, emergency. Caught by reading the
-        // disassembly, after the edit that was supposed to prevent it silently
-        // failed to apply.
-        "  cmp  w1, #{stopping}",
-        "  b.eq 25f",
-        "  cmp  w1, #{failing}",
-        "  b.eq 20f",
-        "  mov  w2, #{failing}",
-        "  strb w2, [x0]",
+        "  adr  x0, {guard}",
+        "  ldr  w1, [x0]",
+
+        "  movz w2, #{silent_lo}",
+        "  movk w2, #{silent_hi}, lsl #16",
+        "  cmp  w1, w2",
+        "  b.eq {terminal}",
+
+        "  movz w2, #{stopping_lo}",
+        "  movk w2, #{stopping_hi}, lsl #16",
+        "  cmp  w1, w2",
+        "  b.eq {quiet}",
+
+        "  movz w2, #{failing_lo}",
+        "  movk w2, #{failing_hi}, lsl #16",
+        "  cmp  w1, w2",
+        "  b.eq {emergency}",
+
+        // Not failing. Claim the first rung and take the normal report path.
+        "  str  w2, [x0]",
         "  mov  x0, #\\idx",
         "  b    {handler}",
-        // Already failing. Say so on the console, then stop.
-        //
-        // An earlier revision halted here in silence, which made the one failure
-        // this table exists to prevent — a fault storm — indistinguishable from a
-        // clean shutdown, and made a corrupted guard byte turn the FIRST genuine
-        // fault into nothing at all. Sixteen bytes and no stack: the address is
-        // built with `movz`, the string is read with a post-indexed `ldrb`, and
-        // TXFF is polled so a full FIFO drops nothing.
-        // x0 still holds the flag's address. Claim the emergency path before
-        // reaching a device, so a fault inside it lands on the dead stop.
-        "20: mov  w2, #{stopping}",
-        "    strb w2, [x0]",
-        "    movz x1, #{uart_hi}, lsl #16",
-        "    adr  x0, 23f",
-        "21: ldrb w2, [x0], #1",
-        "    cbz  w2, 24f",
-        "22: ldr  w3, [x1, #{fr_off}]",
-        "    tbnz w3, #{txff_bit}, 22b",
-        "    str  w2, [x1, #{dr_off}]",
-        "    b    21b",
-        "23: .asciz \"SKYNET_REFAULT\\r\\n\"",
-        "    .balign 4",
-        // Stop the machine, rather than spin. A `wfi` loop here is honest about
-        // the state but indistinguishable from a hang, and a hang is what this
-        // whole path exists to remove: CI would see a timeout, which is the
-        // signal that hid the original storm for two contributions.
-        "24: movz x0, #{psci_off_lo}",
-        "    movk x0, #{psci_off_hi}, lsl #16",
-        "    hvc  #0",
-        // Reached two ways: PSCI SYSTEM_OFF returning, which it does not; and a
-        // third exception, whose entry found STOPPING and came straight here
-        // without touching a device. Both mean the machine is beyond diagnosis,
-        // and this is the only end that cannot itself fault.
-        "25: wfi",
-        "    b    25b",
         ".endm",
 
         ".align 7", "ENTRY 0",
         ".align 7", "ENTRY 1",
         ".align 7", "ENTRY 2",
         ".align 7", "ENTRY 3",
-        // Current EL with SP_ELx — the four that can happen at M1.
+
         ".align 7", "ENTRY 4",
         ".align 7", "ENTRY 5",
         ".align 7", "ENTRY 6",
         ".align 7", "ENTRY 7",
-        // Lower EL using AArch64 — unreachable until EL0 exists at M3.
+
         ".align 7", "ENTRY 8",
         ".align 7", "ENTRY 9",
         ".align 7", "ENTRY 10",
         ".align 7", "ENTRY 11",
-        // Lower EL using AArch32 — never; AArch32 is not supported.
+
         ".align 7", "ENTRY 12",
         ".align 7", "ENTRY 13",
         ".align 7", "ENTRY 14",
         ".align 7", "ENTRY 15",
 
-        handler = sym exception_entry,
-        guard    = sym super::fail::IN_FAILURE,
-        failing  = const super::fail::FAILING,
-        stopping = const super::fail::STOPPING,
-        uart_hi  = const (super::platform::UART0_BASE >> 16),
-        dr_off   = const super::pl011::BootConsole::DR,
-        fr_off   = const super::pl011::BootConsole::FR,
-        txff_bit = const super::pl011::BootConsole::FR_TXFF.trailing_zeros(),
-        psci_off_lo = const (super::psci::PSCI_SYSTEM_OFF & 0xffff),
-        psci_off_hi = const ((super::psci::PSCI_SYSTEM_OFF >> 16) & 0xffff),
+        handler     = sym exception_entry,
+        emergency   = sym emergency_report,
+        quiet       = sym quiet_stop,
+        terminal    = sym terminal_stop,
+        guard       = sym super::fail::IN_FAILURE,
+        failing_lo  = const (super::fail::FAILING & 0xffff),
+        failing_hi  = const (super::fail::FAILING >> 16),
+        stopping_lo = const (super::fail::STOPPING & 0xffff),
+        stopping_hi = const (super::fail::STOPPING >> 16),
+        silent_lo   = const (super::fail::SILENT & 0xffff),
+        silent_hi   = const (super::fail::SILENT >> 16),
     )
+}
+
+/// Rung two: the report faulted. Print a fixed marker, then stop the machine.
+///
+/// No stack, no `BootConsole`, no constructor. The address is formed with one
+/// `movz`, the string is read out of this function's own body, and the poll on
+/// TXFF is BOUNDED — see [`BootConsole::POLL_BUDGET`](super::pl011::BootConsole).
+///
+/// # Safety
+/// Reached only by a branch from a vector entry, with x0 holding the guard's
+/// address and the guard reading [`FAILING`](super::fail::FAILING). Never
+/// returns. Not callable from Rust and not meant to be.
+#[unsafe(naked)]
+unsafe extern "C" fn emergency_report() -> ! {
+    naked_asm!(
+        // Claim rung three BEFORE touching a device, so a fault in anything
+        // below lands on `quiet_stop` rather than back here.
+        "  movz w2, #{stopping_lo}",
+        "  movk w2, #{stopping_hi}, lsl #16",
+        "  str  w2, [x0]",
+
+        "  movz x1, #{uart_hi}, lsl #16",
+        "  adr  x3, 30f",
+        // The per-byte budget. A UART that answers and never drains is not
+        // bounded by any state machine: no exception is ever taken, so nothing
+        // can intervene. Review pointed QEMU virt's PCIe MMIO window at this
+        // poll — it reads back with TXFF set forever, and the machine spun with
+        // two exceptions on the clock and nothing on the console. A byte that
+        // will not go is dropped, and the marker comes out short rather than
+        // never.
+        "20: ldrb w4, [x3], #1",
+        "    cbz  w4, 24f",
+        "    movz w5, #{poll_lo}",
+        "    movk w5, #{poll_hi}, lsl #16",
+        "21: ldr  w6, [x1, #{fr_off}]",
+        "    tbz  w6, #{txff_bit}, 23f",
+        "    subs w5, w5, #1",
+        "    b.ne 21b",
+        "    b    20b",
+        "23: str  w4, [x1, #{dr_off}]",
+        "    b    20b",
+
+        "30: .asciz \"SKYNET_REFAULT\\r\\n\"",
+        "    .balign 4",
+
+        "24: b    {quiet}",
+
+        quiet       = sym quiet_stop,
+        uart_hi     = const (super::platform::UART0_BASE >> 16),
+        dr_off      = const super::pl011::BootConsole::DR,
+        fr_off      = const super::pl011::BootConsole::FR,
+        txff_bit    = const super::pl011::BootConsole::FR_TXFF.trailing_zeros(),
+        poll_lo     = const (super::pl011::BootConsole::POLL_BUDGET & 0xffff),
+        poll_hi     = const (super::pl011::BootConsole::POLL_BUDGET >> 16),
+        stopping_lo = const (super::fail::STOPPING & 0xffff),
+        stopping_hi = const (super::fail::STOPPING >> 16),
+    )
+}
+
+/// Rung three: stop the machine without touching a device.
+///
+/// Reached when the marker path itself faulted, and as the ordinary end of that
+/// path. Claims rung four first, so a fault in the `hvc` lands on
+/// [`terminal_stop`] instead of trying the same `hvc` again forever — which is
+/// what a three-rung ladder did, and why there are four.
+///
+/// # Safety
+/// As [`emergency_report`]: reached only from a vector entry or from that
+/// function, x0 holding the guard's address. Never returns.
+#[unsafe(naked)]
+unsafe extern "C" fn quiet_stop() -> ! {
+    naked_asm!(
+        "  movz w2, #{silent_lo}",
+        "  movk w2, #{silent_hi}, lsl #16",
+        "  str  w2, [x0]",
+        "  movz x0, #{psci_off_lo}",
+        "  movk x0, #{psci_off_hi}, lsl #16",
+        "  hvc  #0",
+        "  b    {terminal}",
+        terminal     = sym terminal_stop,
+        silent_lo    = const (super::fail::SILENT & 0xffff),
+        silent_hi    = const (super::fail::SILENT >> 16),
+        psci_off_lo  = const (super::psci::PSCI_SYSTEM_OFF & 0xffff),
+        psci_off_hi  = const ((super::psci::PSCI_SYSTEM_OFF >> 16) & 0xffff),
+    )
+}
+
+/// Rung four: the end that cannot itself fault.
+///
+/// Two instructions, no memory access, no device, no `hvc`. Everything above it
+/// can go wrong; this cannot. It is also the only rung that says nothing, and
+/// reaching it means three earlier attempts to say something all faulted.
+///
+/// # Safety
+/// Reached only from a vector entry or from [`quiet_stop`]. Never returns.
+#[unsafe(naked)]
+unsafe extern "C" fn terminal_stop() -> ! {
+    naked_asm!("1: wfi", "   b 1b")
 }

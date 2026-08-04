@@ -189,6 +189,70 @@ thousand merges still writes only to quarantine.
 """
 
 # ---------------------------------------------------------------------------
+# The role that was missing
+#
+# reviewer-constitution, ruling on C-0007: "the orchestrator that wrote the three
+# self-recorded defects appears in no governing file, and seven commits on main
+# this session were not the gate's." Measured afterwards: thirty-two.
+#
+# It was right, and the omission was not an oversight in the ordinary sense. The
+# separation-of-powers model was written about the roles inside the forge and
+# quietly assumed the thing running the forge was outside the frame. It is not.
+# It writes the specifications the judges read, assembles their briefs, and
+# commits to main without passing the gate.
+#
+# All four governance defects recorded in the ledger trace to it, and each was
+# caught by a judge rather than by a check.
+# ---------------------------------------------------------------------------
+
+[[role]]
+id = "orchestrator"
+kind = "process"
+acts_for = "bdfl"
+purpose = """
+Runs the forge. Spawns agents into roles, assembles the briefs they read,
+applies review findings to the parts of the repository no contribution may
+touch, and commits those directly to main.
+"""
+may_write = ["ci/", "governance/", "roadmap/", "rfcs/", "tasks/", "forge/", "web/"]
+may_append = [".provenance/ledger.jsonl"]
+may_not = [
+    "kernel/ — the kernel reaches main only through ci/gate.sh, checked mechanically",
+    "rewrite any existing ledger line",
+    "cast, alter or discard a verdict",
+    "merge a contribution — that is the gate's, and only the gate's",
+]
+must = [
+    "record every governance defect of its own in the ledger, as an appended entry",
+    "leave a sitting panel's branch untouched — enforced by the branch pin",
+    "keep another judge's verdict out of every artefact a judge reads",
+]
+
+[role.why_this_is_dangerous]
+text = """
+This role holds more practical power than any other in this file, and the least
+mechanical constraint. It writes what the judges are judged against; it decides
+what question they are asked; and its commits reach main without review.
+
+Two of its recorded defects show what that costs. It handed a judge a premise
+that was false in both halves — the judge verified, found the error, and took
+care to record it as a mistake rather than a manoeuvre. And it rewrote files
+while judges were measuring them — a reviewer noticed and defended itself by
+working from clean extractions, which is a judge compensating for the party that
+briefed it, and is not a control.
+
+The second now has one: forge pins the branch head at submission and the gate
+refuses a branch that moved. The first has none, and probably cannot: no script
+determines whether a sentence in a prompt is true. What stands in for it is that
+judges verify premises rather than accept them, which has worked every time it
+has been tested — and is a property of the judges, not of this role.
+
+The honest summary is that this role is contained by disclosure and by the
+judgement of agents it briefs, not by structure. Naming it does not fix that.
+It makes it visible, which is the prerequisite.
+"""
+
+# ---------------------------------------------------------------------------
 # Not a role
 # ---------------------------------------------------------------------------
 

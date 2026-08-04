@@ -81,6 +81,16 @@ cond_budgets(){ heading "5. Budgets";     _absorb ci/build.sh --size; }
 cond_hal()    { heading "6. HAL boundary";_absorb ci/constitution-check.sh --check hal-boundary; }
 cond_deps()   { heading "7. Dependencies";_absorb ci/constitution-check.sh --check no-kernel-deps; }
 
+# Checks that existed and that nothing could fail a merge over.
+#
+# reviewer-constitution measured it: "--check minting-sites is invoked by nothing
+# that can fail a merge", and separately that a committed rewrite of the ledger
+# passes because the gate never runs the append-only check. A check the gate does
+# not run is documentation.
+cond_authority() { heading "6b. Authority minting";  _absorb ci/constitution-check.sh --check minting-sites; }
+cond_ledger()    { heading "10b. Ledger append-only"; _absorb ci/constitution-check.sh --check provenance; }
+cond_kprov()     { heading "10c. Kernel provenance";  _absorb ci/constitution-check.sh --check kernel-provenance; }
+
 # Run a sub-check in the contribution's worktree, echo its per-check lines, and
 # fold its tallies into ours. The sub-scripts already speak PASS/FAIL/PENDING;
 # we count what they printed rather than re-deriving it, so there is exactly one
@@ -483,8 +493,8 @@ run_all() {
     info "branch $C_BRANCH"
 
     cond_build; cond_lint; cond_tests; cond_boot
-    cond_budgets; cond_hal; cond_deps
-    cond_reviewers; cond_guardian; cond_provenance
+    cond_budgets; cond_hal; cond_deps; cond_authority
+    cond_reviewers; cond_guardian; cond_provenance; cond_ledger; cond_kprov
 
     echo
     if [ "$CHECKS_FAIL" -gt 0 ]; then
@@ -517,7 +527,9 @@ main() {
                      case "$2" in
                         build) cond_build ;; lint) cond_lint ;; tests) cond_tests ;;
                         boot) cond_boot ;; budgets) cond_budgets ;; hal) cond_hal ;;
-                        deps) cond_deps ;; reviewers) cond_reviewers ;;
+                        deps) cond_deps ;; authority) cond_authority ;;
+                        ledger) cond_ledger ;; kernel-provenance) cond_kprov ;;
+                        reviewers) cond_reviewers ;;
                         guardian) cond_guardian ;; provenance) cond_provenance ;;
                         *) die "unknown condition '$2' (try --list)" ;;
                      esac

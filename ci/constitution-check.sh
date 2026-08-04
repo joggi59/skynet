@@ -248,6 +248,56 @@ check_minting_sites() {
 }
 
 # ---------------------------------------------------------------------------
+# The kernel reaches main only through the gate.
+#
+# governance/roles.toml says main has exactly one writer. Nothing checked it.
+# A reviewer measured that thirty-two commits on main this session were not the
+# gate's — all infrastructure, none kernel, but nothing distinguished the two.
+#
+# This is the constraint with teeth on the orchestrator role: it may write ci/,
+# governance/, roadmap/, rfcs/ and forge/ directly, and it may not put a byte of
+# kernel/ on main except by merging a contribution the gate approved.
+# ---------------------------------------------------------------------------
+check_kernel_provenance() {
+    heading "The kernel reaches main only through the gate"
+    if ! git rev-parse --verify main >/dev/null 2>&1; then
+        skip "no main branch"
+        return
+    fi
+
+    # The empty tree, for the root commit — which has no parent, so `$h^` does not
+    # resolve and `git diff-tree` fails. The first version of this check read that
+    # failure as "the kernel changed" and flagged the genesis commit, which touches
+    # no kernel file at all.
+    #
+    # That is the same defect three reviewers have now found in three different
+    # checks: an absence read as the thing being checked. It is recorded here
+    # rather than quietly fixed, because it happened in the check written to
+    # constrain the role that keeps producing it.
+    local empty; empty=$(git hash-object -t tree /dev/null)
+
+    local bad=0 n=0
+    while IFS='|' read -r h subj; do
+        [ -z "$h" ] && continue
+        local parent
+        parent=$(git rev-parse --verify --quiet "$h^" 2>/dev/null) || parent="$empty"
+        # Did this first-parent step change kernel/ at all?
+        git diff-tree --quiet "$parent" "$h" -- kernel 2>/dev/null && continue
+        n=$((n+1))
+        case "$subj" in
+            *"merged by gate (contribution "*) ;;
+            *)  fail "kernel changed on main outside a gate merge"
+                detail "$h  $subj"
+                bad=1 ;;
+        esac
+    done < <(git log --first-parent main --format='%h|%s' 2>/dev/null)
+
+    if [ "$bad" -eq 0 ]; then
+        pass "every kernel change on main came from a gate merge ($n merge(s))"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Invariant 3 — total provenance
 # The ledger must be well-formed and append-only.
 # ---------------------------------------------------------------------------
@@ -427,6 +477,7 @@ run_all() {
     check_provenance
     check_vector_alignment
     check_minting_sites
+    check_kernel_provenance
     check_hal_boundary
     check_no_kernel_deps
     check_english
@@ -457,6 +508,7 @@ main() {
                 english)         check_english ;;
                 vector-alignment) check_vector_alignment ;;
                 minting-sites)   check_minting_sites ;;
+                kernel-provenance) check_kernel_provenance ;;
                 zero-telemetry)  check_pending_invariant "zero_telemetry" 5 "M6" \
                                      "no outbound path can be verified absent before a network stack exists" ;;
                 electorate)      check_pending_invariant "agents_do_not_vote" 9 "G3" \

@@ -294,12 +294,20 @@ check_panel_leak() {
     local verdicts='approv|reject|refus|dissent|verdict|blocking|major|minor|finding|flagged|raised'
     local found=0
 
-    # 1. Task files. Read by every judge, and versioned, so a leak outlives the
-    #    panel that it contaminated.
+    # 1. Task files AND kernel source — every versioned artefact a judge reads
+    #    while ruling on a contribution.
+    #
+    #    Kernel source was outside this check until a reviewer found an
+    #    attribution in link.ld and a second one added, in the same file, by the
+    #    commit that claimed to have removed the last of them. The author's own
+    #    verification had grepped `--include='*.rs'`; the linker script sits in
+    #    the same directory and is not Rust. An absence read as the thing being
+    #    checked, in the check written to stop that.
     local hits
-    hits=$(grep -rniE "($judges)" tasks/ 2>/dev/null | grep -iE "($verdicts)" || true)
+    hits=$(grep -rniE "($judges)" tasks/ kernel/ 2>/dev/null \
+           | grep -v '^kernel/target/' | grep -iE "($verdicts)" || true)
     if [ -n "$hits" ]; then
-        fail "a task file names a judge beside a verdict"
+        fail "a task file or kernel source names a judge beside a verdict"
         while IFS= read -r h; do detail "$h"; done <<< "$hits"
         found=1
     fi

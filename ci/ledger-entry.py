@@ -44,6 +44,14 @@ entry = {
     "contribution_id": cid, "task": task, "rfc": rfc, "objective": objective,
     "objective_weight": int(weight), "weight_source": wsrc,
     "agent": agent, "model": model, "prompt_hash": phash,
+    # The role the agent acted in, not just its name.
+    #
+    # Absent until ci/ledger-schema.py started validating merges and refused
+    # one — correctly, and after sixteen conditions had already passed, which is
+    # exactly where a missing field should be caught rather than in the ledger.
+    # "who wrote this" was answerable only by convention: every agent in this
+    # forge that reaches the gate does so as an implementer, and nothing said so.
+    "agent_role": "implementer",
     "reviewer_verdicts": verdicts(
         "reviewer-*.json", ["role", "verdict", "confidence", "findings", "reasoning"]),
     "guardian_verdicts": verdicts(

@@ -42,9 +42,9 @@ use super::psci::PowerControl;
 /// lines directly beneath them, in the patch that wrote them.
 ///
 /// It is `pub(super)`, not module-private. It is an `AtomicU32` holding one of
-/// four values, not a flag. All sixteen vector entries read it and write it, on
-/// every exception, panic or no panic — `exception.rs` takes it by `sym`. And
-/// its effect is no longer to halt: it selects between reporting the fault,
+/// four values, not a flag. All sixteen vector entries READ it on every
+/// exception and each advances it on exactly one of its four paths —
+/// `exception.rs` takes it by `sym`. And its effect is no longer to halt: it selects between reporting the fault,
 /// printing a sixteen-byte marker and stopping the machine, and stopping dead
 /// without touching a device.
 ///
@@ -168,7 +168,7 @@ unsafe fn console() -> BootConsole {
 ///     counter-example was booted: a file with no `asm!`, no `core::arch`, no
 ///     `target_arch` and no constructor call declares
 ///     `extern "C" { #[link_name = "<the v0-mangled symbol>"] fn f(..); }` and
-///     puts 192 bits of its own choosing on the operator's console, then powers
+///     puts 160 bits of its own choosing on the operator's console, then powers
 ///     the machine off. Build, clippy `-D warnings` and the full constitution
 ///     check all pass.
 ///
@@ -293,9 +293,9 @@ impl Failure {
     /// four integers. Neither is a statement about who calls.
     ///
     /// # Safety
-    /// Callable only from an exception vector. Aliases a console owned
-    /// elsewhere, sound only because the kernel has already failed and no other
-    /// code will run again.
+    /// Callable only from an exception vector, which has already advanced the
+    /// ladder. Aliases a console owned elsewhere, sound only because the kernel
+    /// has already failed and no other code will run again.
     /// `pub(super)`, not `pub`. The counter-example was compiled against
     /// the previous revision: `Failure` is re-exported at crate scope, `Slot`
     /// being private does not help because `None` needs no name, and portable
@@ -306,10 +306,9 @@ impl Failure {
     /// cycle before this one. It was applied to the constructors and not to
     /// this function.
     pub(super) unsafe fn fault_stop(slot: Option<Slot>, esr: u64, far: u64, elr: u64) -> ! {
-        // NO guard check here. The vector entry already test-and-set the flag,
-        // ten instructions after the exception was taken and before any stack was
-        // touched. Checking again would see the flag this fault's own entry set,
-        // and halt before printing anything.
+        // NO guard check here, and no guard write. The vector entry advanced the
+        // ladder before any stack was touched; checking again would see what
+        // this fault's own entry just wrote and stop before printing anything.
 
         // SAFETY: as for `fail_stop` — the kernel has failed, this never
         // returns, and the guard above makes the "at most once" clause true of

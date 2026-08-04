@@ -58,8 +58,8 @@ unsafe extern "C" fn _start() -> ! {
 
         // EL1 is the only supported entry level. Anything else parks.
         //
-        // An earlier revision dropped from EL2 to EL1 for robustness.
-        // reviewer-safety refused it as a blocking finding, correctly: QEMU sets
+        // An earlier revision dropped from EL2 to EL1 for robustness. Review
+        // refused it as a blocking finding, correctly: QEMU sets
         // the PSCI conduit to SMC when virtualization=on and disables an HVC
         // conduit whenever the boot EL is 2 or above, so a kernel that dropped
         // from EL2 would boot and then be unable to shut down — its hvc traps to

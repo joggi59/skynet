@@ -34,9 +34,27 @@ SECTIONS
      * undefined instruction taken AT vector entry 4 and vectoring straight back
      * into itself. The overflow had eaten the handler for its own fault.
      *
-     * Both now sit at the bottom of the image, so an overflow must destroy every
-     * other section before it arrives — and it dies executing rubbish in `.text`
-     * long beforehand, with the guard and the table intact to report it.
+     * What this buys, exactly, and what it does not.
+     *
+     * It buys DISTANCE against an overflow that descends a frame at a time:
+     * about 2.9 KiB of `.rodata` and `.text` that must be destroyed first. Three
+     * judges measured the same threshold independently. Below ~2,916 bytes of
+     * overrun the machine reports the fault and exits 0; between 2,948 and 2,984
+     * it exits 0 saying nothing; from ~2,992 it storms — 3,895,448 exceptions at
+     * 4,000 bytes, empty console, exit 124. That threshold IS this distance.
+     *
+     * It buys NOTHING against a single frame larger than the distance. A 4 KiB
+     * local array steps over `.text`, `.failpath` and `.guard` in one instruction
+     * and lands on the vector table: 3,804,172 exceptions, the identical
+     * signature. That is a stack clash, it is ordinary Rust, and no ordering of
+     * sections prevents it.
+     *
+     * The structural answer is a guard page and it needs the MMU — RFC-0002 O-9,
+     * which said so before this section was reordered, and which an earlier
+     * version of this comment replaced with a claim that an overflow "must
+     * destroy every other section before it arrives". That was false, and it was
+     * false in the reassuring direction, which is worse than the gap it papered
+     * over.
      *
      * Two other layouts were considered and rejected. `.vectors` above
      * `__stack_top` puts PROGBITS above NOBITS, and `objcopy -O binary` pads
@@ -70,6 +88,21 @@ SECTIONS
      * KEEP: reached by `sym` from the vector table's assembly and by name from
      * fail.rs, neither of which roots it for --gc-sections. */
     .guard : ALIGN(8) { KEEP(*(.guard)) }
+
+    /* The failure path's code and the string it prints, protected with them.
+     *
+     * These three functions used to live in `.text`, which this layout does not
+     * protect — and the marker they print is `.asciz` inside one of them. Review
+     * found both halves: zeroing `.text` while leaving the guard and the table
+     * intact still stormed, because the first instruction of the rung is what
+     * advances the ladder; and a stack overflow that clipped the string made
+     * `ci/boot-test.sh` pass five checks on a kernel that had overflowed and
+     * taken three faults, because the marker it greps for was no longer there.
+     *
+     * The advance moved into the vector entry, so these functions now hold no
+     * state. They are here so that the code and the text of the last thing this
+     * kernel ever says are as hard to destroy as the table that reaches them. */
+    .failpath : ALIGN(8) { KEEP(*(.failpath)) }
 
     .text : ALIGN(8) {
         /* KEEP so _start survives --gc-sections.
@@ -120,6 +153,10 @@ SECTIONS
            "the re-entrancy guard is not below .text: a stack overflow reaches it before it reaches anything else")
     ASSERT(ADDR(.vectors) < ADDR(.text),
            "the vector table is not below .text: a stack overflow destroys the handler for its own fault")
+    ASSERT(ADDR(.failpath) < ADDR(.text),
+           "the failure path is not below .text: a stack overflow destroys the code that reports it, and the marker CI greps for")
+    ASSERT(SIZEOF(.failpath) > 0,
+           "the failure path section is empty: the emergency rungs are somewhere else")
     ASSERT(SIZEOF(.guard) >= 4,
            "the re-entrancy guard section is empty or too small: nothing is holding the flag")
 

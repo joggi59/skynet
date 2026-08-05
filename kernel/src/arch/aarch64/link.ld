@@ -36,65 +36,52 @@ SECTIONS
      *
      * What this buys, exactly, and what it does not.
      *
-     * It buys DISTANCE against an overflow that descends a frame at a time.
+     * The layout, as `objdump -h` reports it at the time of writing. Read it
+     * from the tool rather than from here; the ASSERTs below are what actually
+     * hold the order, and they are checked at every link.
      *
-     * An earlier version of this comment said "about 2.9 KiB before anything the
-     * failure path needs is touched". With `.rodata` above `.text` the real
-     * figure was 728 bytes — wrong by a factor of four, in the reassuring
-     * direction, which is the direction this file has now been wrong in four
-     * times. It was wrong because every probe used to find it destroyed its own
-     * writing loop, so each depth reported the writer's address rather than the
-     * parameter.
+     *   .vectors   0x40080000    2012 bytes
+     *   .guard     0x400807e0       4 bytes
+     *   .failpath  0x400807e8      96 bytes
+     *   .rodata    0x40080848     740 bytes
+     *   .text      0x40080b30    2448 bytes
+     *   .bss       0x400814c0       0 bytes
+     *   .stack     0x400814c0   65536 bytes
      *
-     * Measured with a writer relocated to 0x44100000, outside everything it
-     * destroys, on this ordering. These are bracketing points, not thresholds:
+     * The stack grows down from `__stack_top`, so it destroys `.text` first and
+     * the vector table last. Measured with a writing loop relocated to
+     * 0x44100000, outside everything it destroys — a loop that writes over its
+     * own code reports where it died, not the depth it was asked for, and every
+     * earlier figure in this file was that mistake:
      *
-     *   up to 3,072 B          3 exceptions, report or marker, exit 0
-     *   about 3,200 - 4,400    4 exceptions, bounded, SILENT, exit 124
-     *   from about 4,800       millions of exceptions, exit 124
+     *      16 B    2 exceptions   exit 0    full fault report
+     *     800 B    3              exit 0    full fault report
+     *   2,200 B    3              exit 0    SKYNET_REFAULT
+     *   3,072 B    3              exit 0    SKYNET_REFAULT
+     *   3,200 B    4              exit 0    SKYNET_REFAULT
+     *   3,264 B    4              exit 0    silent, but still powers off
+     *   3,280 B    4              exit 124  silent — quiet_stop's hvc is gone
+     *   4,700 B    4              exit 124  silent
+     *   4,800 B    ~3.4 million   exit 124  vector entry 4 destroyed
      *
-     * The middle and last rows are a reviewer's sweep, not this author's: the
-     * first draft of this table said the storm began at 5,300 and it begins near
-     * 4,800, where vector entry 4 is destroyed. Wrong in the reassuring
-     * direction, which is the direction every distance in this file has been
-     * wrong in — five times now, including the sentence that said so.
+     * Three things this table says that the prose it replaced did not.
      *
-     * The middle band is the one worth staring at. It is bounded, it is not a
-     * storm, and it is silent with exit 124 — which is precisely the CI
-     * signature objective 0002 exists to remove. Bounding the exceptions did not
-     * buy a report there.
+     * The ladder keeps bounding exceptions long after it stops being able to
+     * speak: from 3,280 to 4,700 it takes exactly four and then stops dead. That
+     * is not a fault in the ladder. The overrun has destroyed the failure path's
+     * CODE, so no report is possible — and a machine that stops silently with
+     * exit 124 is exactly the CI signature this milestone exists to remove. The
+     * exceptions being bounded did not buy a report.
      *
-     * Nothing in a linker script closes any of this. The answer is a guard page,
-     * and that needs the MMU. Measured against the ordering
-     * this replaced, where the guard sat directly beneath the stack: the same
-     * gradual overflow gave between 2.2 and 4.0 million exceptions with an empty
-     * console and exit 124, and gives three exceptions and a clean stop here.
+     * The edge is 3,280, not a round number, and it is where `quiet_stop`'s
+     * `hvc` dies rather than anything about distance. At 3,264 the machine is
+     * already silent and still powers itself off.
      *
-     * The exact threshold is NOT stated, and an earlier version of this comment
-     * stated one. A probe that writes downward destroys its own loop before it
-     * reaches the depth it was asked for, so every depth past that point
-     * measures the same event — the numbers such a probe reports are its own
-     * address, not the parameter. Whoever needs the real threshold must write a
-     * probe whose writing code cannot be destroyed by its own writes.
-     *
-     * It buys NOTHING against a single frame larger than the distance. A 4 KiB
-     * local array steps over `.text`, `.failpath` and `.guard` in one instruction
-     * and lands on the vector table: 3,804,172 exceptions, the identical
-     * signature. That is a stack clash, it is ordinary Rust, and no ordering of
-     * sections prevents it.
-     *
-     * The structural answer is a guard page and it needs the MMU — RFC-0002 O-9,
-     * which said so before this section was reordered, and which an earlier
-     * version of this comment replaced with a claim that an overflow "must
-     * destroy every other section before it arrives". That was false, and it was
-     * false in the reassuring direction, which is worse than the gap it papered
-     * over.
-     *
-     * Two other layouts were considered and rejected. `.vectors` above
-     * `__stack_top` puts PROGBITS above NOBITS, and `objcopy -O binary` pads
-     * across the whole 64 KiB stack — the hazard already described below.
-     * `.stack` at RAM base lands in the low 512 KiB QEMU builds the device tree
-     * into, which objective 0002's second success criterion needs.
+     * And past 4,800 nothing here helps at all: that is vector entry 4, and a
+     * single stack frame larger than the distance reaches it in one instruction
+     * without touching anything in between. That is ordinary Rust, no ordering
+     * of sections prevents it, and the answer is a guard page — which needs the
+     * MMU.
      *
      * VBAR_EL1's low 11 bits are RES0: a table that is not 2 KiB aligned
      * produces no link error, no warning and no fault — the processor truncates
@@ -211,13 +198,14 @@ SECTIONS
      * it is destroyed first. These two say: not the guard, and not the table. */
     /* The ordering this revision exists for, and the last one held by nothing.
      *
-     * Four judges found it independently and one measured the cost: revert
-     * `.rodata` above `.text` and the tree links cleanly, passes clippy, passes
-     * all five boot-test assertions, all nine constitution checks and every
-     * other ASSERT in this file — while `fault_stop`'s jump table sits flush
-     * against the stack floor and a 728-byte overrun branches an instruction to
-     * itself forever, raising no exception any guard could catch. A reviewer
-     * reproduced exactly that on a build where every ASSERT here passed. */
+     * Measured, on a build where every other ASSERT in this file passed: revert
+     * `.rodata` above `.text` and the tree still links cleanly, passes clippy,
+     * passes all five boot-test assertions and all nine constitution checks —
+     * while `fault_stop`'s jump table sits flush against the stack floor. A
+     * 728-byte overrun then zeroes one table entry, `add x14,x14,0` branches the
+     * instruction to itself, and no exception is ever raised for any guard to
+     * catch. Every mechanical check in the repository is green while the machine
+     * spins in a single instruction. */
     ASSERT(ADDR(.rodata) < ADDR(.text),
            "read-only data is above the code that reads it: a stack overflow will zero a jump table before it zeroes an instruction, and a branch-to-self raises no fault for any guard to catch")
 

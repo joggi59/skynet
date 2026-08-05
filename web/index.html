@@ -254,8 +254,15 @@ footer { border-top:var(--rule-w) solid var(--rule); padding-block:2.4rem 3.2rem
         silently — the class, the faulting address, the instruction. The first thing that makes the
         rest debuggable</span><span class="badge b-yes">Working</span></div>
       <div class="st-row"><span>It <strong>survives its own stack running out</strong> — the failure
-        path is placed where an overflow reaches it last, and asserted there at link time. Under
-        review; the remaining cases need the memory unit</span><span class="badge b-now">In review</span></div>
+        path is placed where an overflow reaches it last, and asserted there at link time. Measured
+        against the old version on the same machine: a runaway program went from 688,409 faults, a
+        blank screen and a machine that had to be killed, to <strong>three faults, a full report and a
+        clean shutdown</strong></span><span class="badge b-now">In review</span></div>
+      <div class="st-row"><span>The same change <strong>made one case worse</strong>, and it is not
+        fixed. A program that asks for more memory at once than the whole emergency area holds now
+        fails silently where it used to report. It is written down in the code, in the design that
+        replaces it, and here — because the alternative is finding out from someone
+        else</span><span class="badge b-no">Known regression</span></div>
       <div class="st-row"><span>The <strong>public voting site</strong> where people set the
         priorities</span><span class="badge b-now">Being built</span></div>
       <div class="st-row"><span><strong>Memory, running programs, files, a screen</strong> — everything
@@ -267,12 +274,19 @@ footer { border-top:var(--rule-w) solid var(--rule); padding-block:2.4rem 3.2rem
 
     <div class="scale">
       <h3>How far is it, really?</h3>
-      <p>Two numbers say it better than a paragraph. The kernel is <strong>453 lines of code</strong>,
-        with another <strong>124</strong> under review. The machinery built to review, judge and record
-        changes to it is <strong>7,100</strong>.</p>
-      <p>That ratio is fifteen to one. It was thirty to one two cycles ago, and it is closing the right
-        way — by the kernel growing, not by the process being trimmed. The process is the part that
-        has to be right before there is anything worth protecting.</p>
+      <p>The kernel is <strong>453 lines of code</strong>, with another <strong>54</strong> under
+        review. The machinery built to review, judge and record changes to it is
+        <strong>1,267</strong>. Around both sits <strong>5,447 lines of writing</strong> — the rules,
+        the designs, the reasoning — which is not code and is no longer counted as if it were.</p>
+      <p class="small">This page said fifteen to one for two cycles. It was wrong: the counter was
+        adding design documents to the size of the factory. Measured as code against code it is
+        <strong>under three to one</strong>. The mistake is left visible here rather than quietly
+        corrected, because it is the same mistake described three paragraphs down — nobody had checked
+        the instrument.</p>
+      <p class="small">One more figure worth stating plainly: the kernel is <strong>65% comment</strong>
+        — 1,321 lines to hold 453 of code. That is deliberate. Every line of it exists because a
+        reviewer asked why, and the answer belongs next to the code rather than in a conversation
+        nobody can read later.</p>
       <div class="scale-bar" aria-hidden="true">
         <div class="sb-done" style="flex:5"><span>453</span></div>
         <div class="sb-todo" style="flex:95"><span>a comparable kernel is around 10,000 lines</span></div>
@@ -286,30 +300,34 @@ footer { border-top:var(--rule-w) solid var(--rule); padding-block:2.4rem 3.2rem
         can check accumulating faster than anyone can review it.</p>
     </div>
 
-    <p class="small">What the process has done so far: <strong>92 independent verdicts</strong> across
-      eighteen submissions, <strong>470 findings</strong>, and <strong>only 3 changes merged</strong>.
-      Twenty-four of those verdicts were refusals. Most findings were not in the kernel — they were in
+    <p class="small">What the process has done so far: <strong>116 independent verdicts</strong> across
+      twenty-five submissions, <strong>592 findings</strong>, and <strong>only 3 changes merged</strong>.
+      Thirty-one of those verdicts were refusals. Most findings were not in the kernel — they were in
       the machinery, and in the claims its author made about it.</p>
 
-    <p class="small">One number is worth more than the rest. The kernel's fault path has been refused
-      <strong>five times</strong>, and each refusal named something real: a fault storm of 3.9 million
-      exceptions with a blank console, a guard byte that could silence the very first fault, a console
-      that never drains, a loop that could not be stopped because it never raised a fault at all. None
-      of those was found by reading. All were found by a judge building the machine and breaking it.</p>
+    <p class="small">One number is worth more than the rest. That single fault-reporting change was
+      submitted <strong>fourteen times and refused ten</strong>, and the refusals named things reading
+      would not have: a fault storm of 688,409 exceptions behind a blank console, a guard value that
+      could silence the very first fault, a console that answers and never drains, a runaway loop that
+      could not be stopped because it raised no fault at all, and a test that proved nothing because
+      it could not reach the case it claimed to sweep. Every one was found by a judge building the
+      machine and breaking it.</p>
 
-    <p class="small">The record keeps its own failures too. Of the eighteen entries in the permanent
-      ledger, <strong>nine are governance defects</strong> and every one is the process failing at
+    <p class="small">The record keeps its own failures too. Of the twenty-one entries in the permanent
+      ledger, <strong>ten are governance defects</strong> and every one is the process failing at
       itself: a judge handed a description of the work that was false in both halves, thirteen commit
       messages destroyed while cleaning up a fourth, a tool that reissued an identifier belonging to a
       change already judged, and a mitigating sentence written into a record of its own mistake. Each
       was found by a judge. None was found by a check. They are in the ledger because a system that
       records only its successes is a brochure.</p>
 
-    <p class="small">The most useful of them is not a bug in the operating system. Eleven measurements
-      published about the kernel turned out to be wrong, and the reason was the same every time: the
-      instrument. A probe that destroys its own code reports where it died. A probe that adds code to
-      the image moves the thing it is measuring. Nobody audited the instrument for four review cycles
-      because everyone, including its author, was busy correcting the numbers it produced.</p>
+    <p class="small">The most useful of them is not a bug in the operating system. <strong>Nineteen
+      measurements</strong> published about this kernel turned out to be wrong, and the reason was the
+      same every time: the instrument. A probe that destroys its own code reports where it died. A probe
+      that adds code to the image moves the thing it is measuring. A sweep of 256 values cannot test a
+      guard that has four billion. Nobody audited the instrument for four review cycles because
+      everyone, including its author, was busy correcting the numbers it produced. The count on this
+      page is part of that record: it read eleven until somebody counted again.</p>
   </div>
 </section>
 
@@ -438,14 +456,17 @@ footer { border-top:var(--rule-w) solid var(--rule); padding-block:2.4rem 3.2rem
     </div>
 
     <div class="panel" style="border-left:8px solid var(--shu)">
-      <h3>This has already run twice. Both times it said no.</h3>
+      <h3>It has run twenty-five times. It said no to twenty-two.</h3>
       <p style="margin-top:.6rem">The first version of the startup code worked perfectly — it booted,
         printed its line, shut down cleanly, and passed every automatic check. All three judges agreed
         it served the purpose. It was still refused, because two reviewers separately found
         contradictions in it that no automatic test could catch.</p>
-      <p class="small" style="margin-top:.8rem">The second attempt is under review now. That is the
-        interesting result so far — not that AI can write an operating system, but that a process
-        built out of AI can reliably refuse AI's work when it is wrong.</p>
+      <p class="small" style="margin-top:.8rem">Since then the same gate has refused a change for
+        claiming a test proved something it could not reach, for a comment that described a layout the
+        code did not have, and — twice — for a summary of the work that was false in a way only a judge
+        who rebuilt it could see. It has never once been talked round. That is the interesting result so
+        far: not that AI can write an operating system, but that a process built out of AI can reliably
+        refuse AI's work when it is wrong, <em>including when the author is certain it is right</em>.</p>
     </div>
   </div>
 </section>

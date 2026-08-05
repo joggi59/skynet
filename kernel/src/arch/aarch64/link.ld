@@ -49,15 +49,23 @@ SECTIONS
      * Measured with a writer relocated to 0x44100000, outside everything it
      * destroys, on this ordering. These are bracketing points, not thresholds:
      *
-     *   up to 3,072 B   3 exceptions, report or marker, exit 0
-     *      about 4,096  4 exceptions, bounded, silent, exit 124
-     *   5,300 B and up  ~3.9 million exceptions, exit 124
+     *   up to 3,072 B          3 exceptions, report or marker, exit 0
+     *   about 3,200 - 4,400    4 exceptions, bounded, SILENT, exit 124
+     *   from about 4,800       millions of exceptions, exit 124
      *
-     * The transitions lie between those brackets and are not stated more
-     * precisely than they were measured. The last row is the vector table itself
-     * being destroyed: 5,300 bytes below `__stack_top - STACK_SIZE` is 44 bytes
-     * INSIDE `.vectors`, not above it — arithmetic this comment also got wrong
-     * once. Nothing in a linker script prevents it, and the answer is the MMU. Measured against the ordering
+     * The middle and last rows are a reviewer's sweep, not this author's: the
+     * first draft of this table said the storm began at 5,300 and it begins near
+     * 4,800, where vector entry 4 is destroyed. Wrong in the reassuring
+     * direction, which is the direction every distance in this file has been
+     * wrong in — five times now, including the sentence that said so.
+     *
+     * The middle band is the one worth staring at. It is bounded, it is not a
+     * storm, and it is silent with exit 124 — which is precisely the CI
+     * signature objective 0002 exists to remove. Bounding the exceptions did not
+     * buy a report there.
+     *
+     * Nothing in a linker script closes any of this. The answer is a guard page,
+     * and that needs the MMU. Measured against the ordering
      * this replaced, where the guard sat directly beneath the stack: the same
      * gradual overflow gave between 2.2 and 4.0 million exceptions with an empty
      * console and exit 124, and gives three exceptions and a clean stop here.
@@ -201,6 +209,18 @@ SECTIONS
      *
      * A stack overflow descends from __stack_top. Whatever sits directly beneath
      * it is destroyed first. These two say: not the guard, and not the table. */
+    /* The ordering this revision exists for, and the last one held by nothing.
+     *
+     * Four judges found it independently and one measured the cost: revert
+     * `.rodata` above `.text` and the tree links cleanly, passes clippy, passes
+     * all five boot-test assertions, all nine constitution checks and every
+     * other ASSERT in this file — while `fault_stop`'s jump table sits flush
+     * against the stack floor and a 728-byte overrun branches an instruction to
+     * itself forever, raising no exception any guard could catch. A reviewer
+     * reproduced exactly that on a build where every ASSERT here passed. */
+    ASSERT(ADDR(.rodata) < ADDR(.text),
+           "read-only data is above the code that reads it: a stack overflow will zero a jump table before it zeroes an instruction, and a branch-to-self raises no fault for any guard to catch")
+
     ASSERT(ADDR(.guard) < ADDR(.text),
            "the re-entrancy guard is not below .text: a stack overflow reaches it before it reaches anything else")
     ASSERT(ADDR(.vectors) < ADDR(.text),

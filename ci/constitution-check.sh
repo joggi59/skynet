@@ -449,7 +449,18 @@ $(git log --since="$LEAK_BASELINE_DATE" --format='%h %s%n%b%n@@' "main..$br" 2>/
     local _mentions; _mentions=$(grep -c . "$_leak_mentions" 2>/dev/null || echo 0)
     if [ "${_mentions:-0}" -gt 0 ]; then
         info "$_mentions quoted span(s) exempted as mentions — an unread exemption is how every fail-open here began"
-        head -3 "$_leak_mentions" | while IFS= read -r q; do detail "exempt: $(printf '%s' "$q" | cut -c1-90)"; done
+        # Every exemption, or the count of what is being withheld and why.
+        #
+        # This printed `head -3` under a comment three hundred lines above
+        # promising it "reports what it exempted". At four exemptions the fourth
+        # was invisible: the check announced a number and showed less than the
+        # number, which is the unread exemption the sentence beside it warns
+        # about, in the branch that wrote the sentence.
+        #
+        # There is no ceiling now. A silent truncation of the exemption list is
+        # the one output in this file that must never be shortened for tidiness —
+        # if it is ever bounded again, the bound has to print what it dropped.
+        while IFS= read -r q; do detail "exempt: $(printf '%s' "$q" | cut -c1-90)"; done < "$_leak_mentions"
     fi
     rm -f "$_leak_mentions"
     if [ "$found" -eq 0 ]; then

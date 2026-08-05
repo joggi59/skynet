@@ -125,7 +125,24 @@ excluded = [
 
 [objective.milestones]
 kernel = ["M1"]
-governance = []
+
+# governance was [] and that was the binding constraint, not an omission.
+#
+# A Guardian traced it: every mechanism that would reduce this objective's error
+# rate lives in `ci/` or `governance/`, both owned by the orchestrator and denied
+# by name to architect, decomposer and implementer. `tasks/open/T-0008.toml` and
+# rfcs/0004 §10 each name that work. Nothing assigned any of it, and with an
+# empty governance list this objective could not receive it — so the obligations
+# had nowhere to be filed and stayed prose.
+#
+# The same Guardian attached a condition to its verdict: asked again with this
+# still true, its answer on whether the project is advancing changes. That is the
+# right pressure and this is the response to it.
+#
+# G0 because that is objective 0001's open governance milestone and the work is
+# forge machinery, not new governance: checks that fail closed, a size budget
+# that sees what it measures, and an obligation that survives its task closing.
+governance = ["G0"]
 
 [objective.note_on_scope]
 text = """

@@ -299,6 +299,7 @@ check_panel_leak() {
     # immediately before a role word. "review found" and "review measured" stay
     # legal, because a finding with no agent attached is the form this project
     # wants — the defect described, the finder not.
+    local _leak_mentions; _leak_mentions=$(mktemp)
     local judges='guardian-[0-9]+|reviewer-(safety|conformance|constitution)'
     judges="$judges"'|(a|an|the|one|two|three|four|five|six|both|all|every|several|multiple|independent) (judges?|reviewers?|guardians?|panel)'
 
@@ -323,7 +324,20 @@ check_panel_leak() {
     # was deleted is possible — and the mention branch is REPORTED, because a
     # quotation is still a place a leak can hide and an unread exemption is how
     # every fail-open in this repository began.
+    # Fails LOUDLY, and reports what it exempted.
+    #
+    # The first version discarded stderr and was called with `2>/dev/null`, so an
+    # unavailable interpreter turned two real failures into a silent PASS — review
+    # measured exactly that. An absence read as the thing being checked, in the
+    # file that names that defect three times, introduced by the commit that named
+    # it. And backticks were stripped as mentions, so a leak wrapped in code
+    # quotes was exempt: only double quotes frame a mention now.
     _strip_mentions() {
+        command -v python3 >/dev/null 2>&1 || {
+            echo "ci/constitution-check.sh: python3 unavailable — the mention" \
+                 "stripper cannot run, and this check will not pass by default" >&2
+            exit 70
+        }
         python3 -c '
 import re, sys
 t = sys.stdin.read()
@@ -331,7 +345,7 @@ mentioned = []
 def take(m):
     mentioned.append(m.group(0))
     return " [quoted] "
-t = re.sub(r"\"[^\"\n]{0,200}\"|`[^`\n]{0,200}`", take, t)
+t = re.sub(r"\"[^\"\n]{0,200}\"", take, t)
 sys.stdout.write(t)
 for q in mentioned:
     sys.stderr.write(q + "\n")
@@ -420,11 +434,11 @@ for q in mentioned:
         # sentence, so the text is unwrapped before the rule is applied.
         msgs=$(git log --since="$LEAK_BASELINE_DATE" --format='%h %s%n%b%n@@' "main..$br" 2>/dev/null \
                | awk '{ if ($0=="@@") { print buf; buf="" } else { buf = buf " " $0 } } END { print buf }' \
-               | _strip_mentions 2>/dev/null | grep -niE "($judges)" | grep -iE "($verdicts)" || true)
+               | _strip_mentions 2>>"$_leak_mentions" | grep -niE "($judges)" | grep -iE "($verdicts)" || true)
         msgs="$msgs
 $(git log --since="$LEAK_BASELINE_DATE" --format='%h %s%n%b%n@@' "main..$br" 2>/dev/null \
   | awk '{ if ($0=="@@") { print buf; buf="" } else { buf = buf " " $0 } } END { print buf }' \
-  | _strip_mentions 2>/dev/null | grep -niE "($selfstanding)" || true)"
+  | _strip_mentions 2>>"$_leak_mentions" | grep -niE "($selfstanding)" || true)"
         msgs=$(printf '%s\n' "$msgs" | grep -v '^$' || true)
         [ -n "$msgs" ] || continue
         fail "commit messages on $br name a judge beside a verdict"
@@ -432,6 +446,12 @@ $(git log --since="$LEAK_BASELINE_DATE" --format='%h %s%n%b%n@@' "main..$br" 2>/
         found=1
     done
 
+    local _mentions; _mentions=$(grep -c . "$_leak_mentions" 2>/dev/null || echo 0)
+    if [ "${_mentions:-0}" -gt 0 ]; then
+        info "$_mentions quoted span(s) exempted as mentions — an unread exemption is how every fail-open here began"
+        head -3 "$_leak_mentions" | while IFS= read -r q; do detail "exempt: $(printf '%s' "$q" | cut -c1-90)"; done
+    fi
+    rm -f "$_leak_mentions"
     if [ "$found" -eq 0 ]; then
         pass "no judge attributed in a task file or a contribution branch's history"
         detail "the record belongs in .provenance/ledger.jsonl, where every judge is named on purpose"

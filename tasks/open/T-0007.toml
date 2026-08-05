@@ -1,0 +1,243 @@
+[task]
+id = "T-0007"
+title = "Hand out physical frames from what was discovered, and prove the pool recovers"
+rfc = "0003"
+objective = "0002"      # Objective 0002's THIRD success criterion, verbatim:
+                        # "Frames can be allocated and freed without the allocator
+                        # losing track, proven by a test that exhausts and recovers
+                        # the pool." Milestone kernel = ["M1"].
+state = "open"
+estimated_difficulty = "medium"
+profile = "standard"
+depends_on = "T-0006"   # Hard. See [task.notes]. Do not claim this before T-0006
+                        # has merged: MemoryMap does not exist, and `cargo test`
+                        # does not run.
+
+statement = """
+T-0006 gives the kernel a truthful MemoryMap. This gives it the ability to hand
+parts of that memory out, one 4 KiB frame at a time, and to take them back
+without losing count.
+
+A bitmap, one bit per frame, 1 meaning allocated. RFC-0003 §4 chose it over the
+classic free list threaded through the free frames, for a reason that is about
+the NEXT design rather than this one: a free list writes to every frame it
+manages, and once the MMU is on and everything ungranted is unmapped, an
+allocator that writes into free frames forces either a read-write alias of all
+of RAM — including the page tables — or a runtime-mutable mapping window. A
+bitmap touches only its own bitmap. Do not substitute a free list because it is
+smaller; that trade was made against a constraint you cannot see from here.
+
+Four things must exist when this is done:
+
+  THE RESERVATION UNION. RFC-0003 §3: the reservation block from the blob, the
+  kernel image from KERNEL_BASE to __kernel_end, the blob itself from DTB_BASE
+  for its validated totalsize, and the bitmap's own frames. Reservations round
+  OUTWARD — first frame floor(base / FRAME_SIZE), last frame
+  ceil((base + len) / FRAME_SIZE) - 1 — because a frame that is partly reserved
+  is entirely reserved, and the opposite rounding hands out a frame overlapping
+  the kernel image, whose symptom is memory corruption with no fault and no
+  report.
+
+  THE BITMAP, PLACED IN REAL MEMORY. ceil(total_frames / 8) bytes rounded up to
+  a whole frame, at the first frame boundary at or above __kernel_end. It must
+  lie inside a discovered region and overlap no reservation; both are checked
+  and a failure is legible. Its own frames are marked used BEFORE any frame is
+  handed out. It is not a Rust static — it is RAM the kernel claims, reached
+  through one &'static mut [u8] constructed at one call site in the boot path
+  where the linker symbols live. The kernel still has exactly one static.
+
+  THE ALLOCATOR. An owned value with private fields, no interior mutability, no
+  lock, no accessor, moved into kernel_main like the console and the power
+  token. alloc returns the LOWEST free frame, deterministically, scanned from
+  index zero — no cursor and no hint, so the allocation sequence does not depend
+  on the free history. Frame is neither Copy nor Clone, its field is private,
+  and free consumes it.
+
+  THE TEST THAT IS THE CRITERION. Allocate until None; assert the count equals
+  total; assert available is zero; free everything; assert available equals
+  total; allocate the whole pool a second time and assert the sequence is
+  IDENTICAL. That last clause is what makes it a test of not losing track rather
+  than a test of counting.
+
+Performance is a non-goal. So is anything but single frames of FRAME_SIZE: no
+contiguous allocation, no alignment requests, no zones, no large pages, no slab,
+no buddy. So is the MMU, a heap, locking, atomics, and any policy about
+exhaustion — alloc returns None and what a caller does about it is not decided
+here.
+"""
+
+[task.acceptance]
+# A is the allocator's accounting, host-tested. B is the boot glue and the two
+# things only a machine can show. C is the shape invariant 1 depends on.
+# D is standing. E is what nobody may quietly decide.
+criteria = [
+    # --- A. Accounting, under cargo test ------------------------------------
+    "PROOF: exhaust and recover, RFC-0003 §6 verbatim. Allocate until None; the count equals total(); available() is 0; free every frame; available() equals total(); allocate the whole pool a second time and the sequence of indices is identical to the first. Run it and show the output",
+    "PROOF: reservation rounding. A reservation of ONE byte inside a frame makes that whole frame unavailable and leaves the frame after it available. Test both halves; a test that only checks the reserved frame passes under the rounding that corrupts the kernel image",
+    "PROOF: a region set with a hole between two regions. The frame index space skips the hole, total() counts no frame in it, and a frame freed from the second region returns to the second region — allocate the pool, free one index known to be in the upper region, allocate once, and show the same index comes back",
+    "PROOF: a zero-length reservation entry reserves nothing and is skipped rather than underflowing the last-frame expression. (0, 0) is also the reservation block's terminator; show both readings are handled",
+    "PROOF: an exhausted pool returns None from alloc and does not panic, available() is 0 and total() is unchanged; and a MemoryMap for which no valid bitmap placement exists produces a typed error rather than a truncated bitmap. Test the failing placement as well as the working one",
+    "ci/build.sh --test reports PASS, cargo test shows zero panics across the whole set, and the number of tests it runs is higher than T-0006 left it. State both numbers",
+
+    # --- B. On the machine --------------------------------------------------
+    "PROOF: boot the SAME binary at -m 128M, -m 64M and -m 8M with temporary instrumentation printing total() and available(), and show three different totals that match the machine. State the EXPECTED count from each RAM size BEFORE the measured one — RFC-0003 §4 states 32,768 frames under -m 128M and 2,048 under nano's 8 MiB ceiling. -m 64M is in no RFC and is the point: a build that hardcodes a size passes every other criterion here and fails this one",
+    "PROOF: at each of the three RAM sizes, the FIRST frame alloc() returns is not inside the bitmap, not inside [KERNEL_BASE, __kernel_end), not inside the blob, and not inside any reservation-block entry. The bitmap must be marked used before anything is handed out, and 'the lowest free frame' is exactly the search order that finds the mistake",
+    "PROOF: at -m 8M, allocate the ENTIRE pool and check every frame handed out against all four reservation sources. 2,048 frames is small enough to check exhaustively and this is the honest form of 'the allocator never hands out memory that is spoken for'. Report how many frames were reserved and how many were handed out; the two plus the bitmap's own must equal total()",
+    "PROOF: any failure in the discovery-through-placement sequence writes SKYNET_MEM_FAIL with a reason, no boot marker, and exits cleanly through PSCI. Show at least the bitmap-placement failure reaching it",
+    "the temporary instrumentation is removed before submission, the tree is rebuilt, and every mechanical criterion in group D is re-run and re-reported on the tree you actually submit",
+    "the submission reports TWO numbers at each of the three RAM sizes: the bitmap's size in bytes, against nano's [budget.boot_memory] max_bytes = 1048576, and the measured bitmap_end address. The first is the first boot memory this kernel has ever owned that depends on the machine rather than on the link, and nothing in ci/ measures it (RFC-0003 O-6). The second is what RFC-0003 §7 hands the next design — whatever maps the kernel must map [KERNEL_BASE, bitmap_end), not [KERNEL_BASE, __kernel_end). Neither number is written down anywhere today",
+
+    # --- C. The shape invariant 1 depends on --------------------------------
+    "the kernel still has exactly one `static` item, IN_FAILURE, and no `static mut`. The bitmap is not a static and the allocator is not a static",
+    "REVIEW: Frame is neither Copy nor Clone, its field is private, and free takes it by value. Safe code outside the module cannot present the same frame twice, which is why free's double-free branch is a panic and not an error return",
+    "REVIEW: the allocator has ONE owner. No accessor returns it, no global holds it, no interior mutability, no lock, no atomic. RFC-0003 O-5 defers the second core's answer to M2's concurrency model and names 'a static behind a spinlock' as the thing that would undo what this shape establishes",
+    "REVIEW: FrameAllocator::new's # Safety comment names all four conditions RFC-0003 §4 states — memory nothing else refers to, inside one of the map's regions, overlapping none of its reservations, long enough for the frame count — and the ONE call site is shown upholding each",
+    "BootResources gains its third field and nothing else. No method returning a device by name or index, no lookup, no long-lived value later code reaches into. RFC-0001 warned that a registry is what this becomes and named a method returning a device by name as 'the moment this went wrong'; the submission states the field count and confirms kernel_main still decomposes it at the top",
+    "REVIEW: frames are NOT zeroed and nothing here zeroes them. RFC-0003 O-4: at M1 nothing hands a frame across a trust boundary, the right place is the grant rather than the allocation, and adding it here is a write of every frame at boot that still would not cover a frame reused inside the kernel",
+    "REVIEW: the allocator is the second real authority in this kernel and it is NOT a capability — no attenuation, no revocation, no expiry, no accounting to a holder. Do not add any of them; M4 is where they are designed, and a half-capability built at M1 is the retrofit objective 0002's non_goals exclude in terms",
+    "kernel_main prints NOTHING about the memory it found — no count, no address, no size. Printing a number needs a portable formatter and that is RFC-0001 O-4's design, not a write! added here; invariant 5 is pending until M6, so CI will not catch it",
+
+    # --- D. Standing checks -------------------------------------------------
+    "ci/build.sh exits 0 and ci/build.sh --lint reports zero clippy warnings",
+    "ci/boot-test.sh passes 5/5 and a successful boot prints exactly SKYNET_BOOT_OK and nothing else",
+    "SKYNET_PROFILE=nano ci/build.sh --size is within the 192 KiB budget AND the submission reports the number before and after. Build explicitly first: --size does not rebuild",
+    "ci/constitution-check.sh --check hal-boundary, --check no-kernel-deps, --check vector-alignment and --check minting-sites all pass, minting-sites still reporting exactly 4 call sites, and readelf -S confirms .vectors is present and 2 KiB aligned rather than absent. The allocator's constructor is not a device constructor and must not become one",
+    "grep -c '^\\[\\[package\\]\\]' kernel/Cargo.lock is 1, kernel/Cargo.toml declares no dependency section of any kind, and grep -rnE 'asm!|naked_asm!|global_asm!|core::arch::|#\\[unsafe\\(naked\\)\\]|target_arch' kernel/src | grep -v '^kernel/src/arch/' is empty — in particular frames.rs, hal.rs and lib.rs contain none of them",
+    "REVIEW: no portable file names an architecture and no physical address is stored in a usize. Frame indices are usize; base and length are u64",
+    "the submission reports the largest stack object this task introduces, in bytes, and it is under 1 KiB or the submission says why one must be larger. On the T-0005 branch at 973fd6e the distance from the stack floor to vector entry 4 is 4,800 bytes exactly; a single frame larger than that reaches the vector table in one instruction and no ordering of sections prevents it. The remedy is a guard page, which needs the MMU — tasks/open/T-0008.toml",
+
+    # --- E. What nobody may quietly decide ----------------------------------
+    "OPEN: FRAME_SIZE is introduced here, in arch/, and RFC-0003 §7 says it must equal the translation granule the MMU design will choose — 'two constants that must agree, in two RFCs, is exactly how they come to disagree'. Define it once, in arch/, state its value, and do NOT define a second frame-size constant anywhere. The compile-time assertion that it equals the granule belongs in the RFC that introduces the granule, which does not exist yet",
+    "OPEN: RFC-0003 §4 says double-freeing panics, and a panic prints SKYNET_PANIC and nothing else because RFC-0001 O-4 is unfixed. If you find you want it to say more, that is an RFC, not a patch",
+    "OPEN: the RFC does not say what happens if the discovered regions overlap each other, or if a region overlaps the blob's window below KERNEL_BASE. State what you did in one sentence. If the answer needed a design decision rather than a typed error, say so instead of making it",
+]
+
+[task.scope]
+touches = [
+    "kernel/src/frames.rs",                   # new, portable
+    "kernel/src/lib.rs",                      # pub mod frames;
+    "kernel/src/hal.rs",                      # BootResources gains its third field
+    "kernel/src/main.rs",                     # kernel_main's signature
+    "kernel/src/arch/aarch64/boot.rs",        # reservations, bitmap placement, construction
+    "kernel/src/arch/aarch64/platform.rs",    # or mod.rs — FRAME_SIZE, wherever arch names it
+    "kernel/src/arch/aarch64/mod.rs",
+]
+does_not_touch = [
+    "ci/                — the implementer may not edit the checks that judge it. The ci/ debts this work meets, including the one that would measure its own budget, are in tasks/open/T-0008.toml with their owning role",
+    "rfcs/              — RFC-0003 is settled. If it is wrong, release the task with the measurement rather than arguing it inside a patch",
+    "roadmap/, governance/, CONSTITUTION.md, constitution.toml",
+    ".provenance/",
+    "tasks/            — including this file",
+    "kernel/src/fdt.rs — T-0006's. Touch it only if the read interface T-0006 chose cannot express what §4 needs, and then say exactly what was missing rather than widening it quietly",
+    "kernel/src/arch/aarch64/link.ld — the bitmap is placed at run time above __kernel_end, which already exists. If you find yourself wanting a section, stop: that is a static by another name",
+    "kernel/src/arch/aarch64/exception.rs, fail.rs, hex.rs, pl011.rs, psci.rs, cpu.rs",
+    "kernel/src/panic.rs",
+]
+
+[task.constitutional]
+at_risk = [
+    "1 — no ambient authority (pending, M4): this is the second real authority in the kernel. The console can say things; this can give memory away. What makes it defensible at M1 is that it is an owned value with a private field, constructed once, moved once, with no static and no accessor — the same shape as Power::off(self), applied to memory. Nothing mechanical enforces that; it is held by review alone",
+    "4 — frugality (enforced from M0): the image grows by an allocator, and the kernel's BOOT MEMORY grows by a bitmap whose size depends on the machine. Every profile declares [budget.boot_memory] enforced_from = 'M1' and nothing in ci/ measures it. Report both numbers at all three RAM sizes",
+    "6 — HAL boundary (enforced from M0): frames.rs is portable. FRAME_SIZE, the linker symbols and the one unsafe slice construction are architectural; the bitmap arithmetic is not",
+    "7 — no kernel dependencies (enforced from M0): a bitmap is forty lines. Writing it is the invariant",
+    "5 — zero telemetry (pending, M6): no count, no address and no size reaches the console. The failure path emits compile-time constants only",
+    "3 — total provenance (enforced now): the bitmap_end and boot-memory numbers this task is asked to report exist nowhere else, and the design after this one needs them. A number nobody wrote down is a number the next design will guess",
+]
+
+[task.notes]
+hints = """
+WHY THIS IS THE SECOND TASK AND NOT THE SECOND HALF OF ONE.
+
+RFC-0003 is right that discovery and frames are one design. They are not one
+contribution, and the reason is the order rather than the size: T-0006 wires the
+parser into the boot path and proves at three RAM sizes that what the kernel
+believes changes with the machine, so by the time this task starts the map is
+already real. The failure RFC-0003 warns about — an allocator built over a
+hardcoded range — cannot happen in this order, because the range this allocator
+is handed came from a blob whose contents were measured before it existed.
+
+Do not claim this before T-0006 has merged. It needs MemoryMap to exist, it
+needs FrameAllocator's input type to be stable, and it needs `cargo test` to
+run at all — none of which is true on today's main.
+
+TRAPS.
+
+  __kernel_end is ABOVE .stack, not below it. The linker script places .bss and
+  then .stack (64 KiB, NOLOAD) and sets __kernel_end after them, so the bitmap
+  lands above the stack and the kernel-image reservation must cover the stack
+  too. Read the current link.ld before assuming; T-0005 is open against that
+  file and may move things, though not this symbol.
+
+  The bitmap frames must be reserved BEFORE the first alloc, and RFC-0003 §5
+  orders it: size the bitmap, add it to the reservations, then construct. An
+  allocator that reserves its bitmap after handing out a frame can hand out its
+  own bitmap, and the symptom is a corrupt allocator with no fault.
+
+  Reservations round outward and the last-frame expression underflows on a
+  zero-length entry. It is not a hypothetical: (0, 0) terminates the reservation
+  block.
+
+  overflow-checks = true is on in release. Every piece of arithmetic derived
+  from a blob value — a frame count, a bitmap length, an index — is arithmetic
+  on external input, and an overflow takes the panic path, which prints
+  SKYNET_PANIC and says nothing about what happened.
+
+  ci/build.sh --size does not rebuild. ci/boot-test.sh does not rebuild. Both
+  have already produced a number or a verdict describing a tree other than the
+  one under review. Build explicitly, then measure.
+
+  ci/boot-test.sh has no RAM option: QEMU_RAM is fixed at 128M. The 64M and 8M
+  boots are a direct qemu invocation with the same -M virt -cpu cortex-a72. Do
+  not add a flag to ci/.
+
+  ci/build.sh --lint runs clippy for the bare-metal target, where cfg(test) is
+  off. Your test modules are not linted by --lint. Read cargo test's output.
+
+  Do not write #[should_panic] tests. [profile.dev] sets panic = "abort", so a
+  should_panic test aborts the runner instead of passing. The double-free panic
+  is therefore not testable from a host test, and it does not need to be: safe
+  code cannot present the same Frame twice, which is the property to demonstrate
+  instead.
+
+PROBES LIE IF THEY CAN DESTROY THEMSELVES. The measurements on the fault path
+were wrong by a factor of four, four times, because the instrumentation wrote
+over the code that was doing the writing. The same class applies here in three
+shapes, and the criteria are worded around them:
+
+  An allocator that reports its own total from a constant agrees with itself
+  perfectly. State the expected frame count from the RAM size BEFORE you print
+  the measured one, and boot a size no criterion named.
+
+  A single binary booted at three RAM sizes is a measurement of the machine.
+  Three binaries booted once each is a measurement of three builds.
+
+  Instrumentation that prints a number is bytes in the image. The size figure
+  must come from the tree without it: remove, rebuild, re-measure, re-quote.
+
+  An exhaustive check at -m 8M is worth more than a spot check at -m 128M for
+  exactly this reason — 2,048 frames can be checked completely, and a complete
+  check cannot be satisfied by a coincidence.
+
+WHAT THIS TASK DOES NOT OWN, AND WHO DOES. tasks/open/T-0008.toml. The ones that
+touch this work most directly:
+
+  Nothing in ci/ measures [budget.boot_memory], although every profile declares
+  it enforced from M1 and this contribution is the first to make it depend on
+  the machine. RFC-0003 O-6. Owner: the orchestrator. Two criteria above ask
+  you to report the number by hand, which is the most this task can do.
+
+  /reserved-memory is not parsed. On QEMU virt nothing populates it; on real
+  hardware it is how firmware says 'this memory is mine' and handing such a
+  frame out is silent corruption. RFC-0003 O-2, M9 or the first board that
+  declares one. Owner: the architect. Do not add it here.
+
+  Frames are not zeroed. Today that leaks nothing because nothing crosses a
+  trust boundary. At M3 a frame reaching EL0 with a previous holder's contents
+  is a disclosure. RFC-0003 O-4. Owner: the architect, at M3. Do not add it
+  here — zeroing at alloc costs a write of every frame at boot and still misses
+  the case that matters.
+
+  A guard page below the stack, which is the structural answer to three measured
+  residuals and needs the MMU. Objective 0002's fourth criterion, no RFC yet.
+  Owner: the architect. T-0008 carries the measurements.
+"""

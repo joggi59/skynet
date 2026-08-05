@@ -1,0 +1,266 @@
+[task]
+id = "T-0006"
+title = "Learn the memory map from the device tree, and make the portable kernel host-testable"
+rfc = "0003"
+objective = "0002"      # Objective 0002's SECOND success criterion, verbatim: "The
+                        # kernel knows which physical memory exists and which of it
+                        # is already spoken for, from the device tree rather than
+                        # from constants." Milestone kernel = ["M1"], which is where
+                        # this sits.
+                        #
+                        # Not 0001: its milestone list is ["M0"] and none of its six
+                        # criteria concern memory.
+state = "open"
+estimated_difficulty = "medium"
+profile = "standard"
+first_of = "0003"       # T-0007 is the second half. Ordering is in [task.notes].
+
+statement = """
+Today the kernel knows one address — 0x4008_0000, where the linker put it — and
+one symbol, __kernel_end. Everything else about the machine's memory is unknown.
+
+Deliver three things, in this order, because the third is worthless without the
+first:
+
+  1. THE PREMISE, MEASURED. RFC-0003 §1 places the device tree blob at
+     DTB_BASE = 0x4000_0000 and §0 states plainly that this was read out of
+     QEMU's source and never verified against a running machine — the architect
+     had no qemu-system-aarch64 and no dtc. O-1 records it as the weakest part
+     of the design. `ci/boot-test.sh --contract` lists what the kernel may rely
+     on and a device tree is not on the list.
+
+     So the first deliverable is not code. It is the answer to "is there a blob
+     at 0x4000_0000, for the ELF this tree builds, at more than one RAM size" —
+     measured, reported, and reported honestly if the answer is no.
+
+  2. A CRATE THAT CAN BE TESTED. RFC-0003 §6 measured the shape: a [lib] target
+     beside the existing no_main [[bin]], and build.rs moving all three link
+     args from `rustc-link-arg` to `rustc-link-arg-bins` so the linker script
+     stops being passed to the host test link. Objective 0002's third criterion
+     says "proven by a test" and there is currently nowhere to run one:
+     `ci/build.sh --test` reports SKIP only because a grep for #[cfg(test)]
+     finds nothing. This contribution is the moment that check starts doing
+     something, which RFC-0001 O-5 predicted and asked be settled before the
+     first test is written rather than after.
+
+  3. A PARSER THAT READS EXACTLY TWO THINGS. kernel/src/fdt.rs, portable, no
+     allocation, no retained reference to the blob: the memory reservation
+     block, and every node whose device_type is "memory" with its reg decoded
+     using the ROOT node's #address-cells and #size-cells read from the blob
+     rather than assumed. Output is RFC-0003 §2's Region and MemoryMap in
+     hal.rs. Everything else the device tree contains is a named non-goal.
+
+The boot path validates the header at DTB_BASE, forms the blob slice, parses,
+and on any failure writes SKYNET_MEM_FAIL and a reason to the console it already
+holds and powers the machine off — before the boot marker, so ci/boot-test.sh
+fails on the absent marker while the console says why.
+
+NO FALLBACK AND NO SEARCH. If the header does not validate the kernel does not
+invent a memory map. RFC-0003's Alternatives section rejects both in terms: a
+search that finds 0xd00dfeed in uninitialised RAM builds a memory map out of
+noise, and a fallback constant is what makes the device tree optional, which is
+a constant with extra steps and is what criterion 2 forbids.
+
+The frame allocator is T-0007 and is not yours. Nothing here allocates anything.
+"""
+
+[task.acceptance]
+# Groups. A is the premise and must be measured before B and C are written.
+# B is the crate split. C is the parser and its host tests. D is the boot glue.
+# E is what every task inherits, and F is what nobody may quietly decide.
+criteria = [
+    # --- A. The premise, measured before anything is built ------------------
+    "PROOF: report the first 40 bytes at 0x4000_0000 on a HALTED machine, for the ELF this tree builds, at three RAM sizes: -m 128M, -m 64M and -m 8M. For each, state whether the magic 0xd00d_feed is present and at what address, what totalsize, version and last_comp_version read, and whether totalsize fits inside DTB_MAX_LEN = 0x0008_0000. `ci/boot-test.sh --gdb` gives a halted machine with a stub on :1234 at 128M; the other two are a direct qemu-system-aarch64 invocation with the same -M virt -cpu cortex-a72 and -kernel. Running qemu by hand is not editing ci/",
+    "OPEN: if there is no valid blob at DTB_BASE at any of the three RAM sizes, this task cannot be completed as specified. Do not search a range, do not fall back to a constant, do not add an address to kernel/ the measurement did not support — RFC-0003 names all three as non-goals or rejected alternatives. Release the task and report what you measured. The durable fixes are all in ci/ (RFC-0003 O-1) and ci/ is neither yours nor the decomposer's",
+
+    # --- B. The crate split -------------------------------------------------
+    "ci/build.sh --test reports PASS — not SKIP and not FAIL. This is the first contribution for which that check does anything",
+    "grep -c '^\\[\\[package\\]\\]' kernel/Cargo.lock is 1; kernel/Cargo.toml still declares no [dependencies], [build-dependencies] or [dev-dependencies] section, not even an empty one; nm still places _start at 0x4008_0000; and ci/lib.sh:kernel_binary() still finds the binary",
+    "readelf -S shows .vectors PRESENT, non-zero in size, and 2 KiB aligned. Check it with the tool, not with the check: ci/constitution-check.sh --check vector-alignment reports skip and exits 0 when there is no .vectors section at all, so its passing is not evidence the table exists. A --gc-sections link cannot pull a section out of an object file that was never linked, which is what moving anything holding a custom section into the rlib would do",
+    "REVIEW: the split is the one RFC-0003 §6 specifies and nothing more. src/lib.rs holds hal, fdt and the portable modules; src/main.rs keeps #![no_std] #![no_main], mod arch, mod panic, kernel_main, BOOT_MARKER and the HAL conformance const block. Nothing owning a custom link section — the vector table, the guard, the failure path — moves into the library, and BOOT_MARKER is still found by grep in portable code (RFC-0001 C11)",
+
+    # --- C. The parser, and its host tests ----------------------------------
+    "PROOF: every malformed blob in RFC-0003 §2's set produces its typed error under `cargo test` and none panics. At minimum: a truncated blob, a bad magic, a totalsize larger than DTB_MAX_LEN, a totalsize below 40, version < 17, last_comp_version > 17, off_dt_struct + size_dt_struct past totalsize, off_dt_strings + size_dt_strings past totalsize, a misaligned off_dt_struct, a misaligned off_mem_rsvmap, a property whose len runs past the end of the structure block, an unterminated node, a reservation block with no terminator, and a nesting depth of 33. cargo test shows zero panics across the set",
+    "PROOF: a hand-built minimal blob with one /memory node yields the expected region, and the SAME region encoded with the root node's #address-cells/#size-cells at 1/1 and again at 2/2 yields it both times. That is what proves the cell widths are read from the root node rather than assumed. A cell count above 2 for either is a typed error, tested",
+    "PROOF: a blob reporting more than MAX_REGIONS memory regions, or more than MAX_RESERVED reservation entries, produces a typed error rather than a truncated map. RFC-0003 O-3 records 8 and 16 as guesses whose failure must be legible",
+    "REVIEW: the parser is iterative and depth-bounded at 32, and no function in fdt.rs calls itself. State how you established it — a call graph, or the absence of any self-reference — rather than asserting it",
+    "REVIEW: no arithmetic on a value read from the blob is unchecked. overflow-checks = true is on in release, so an unchecked add on a malformed header is a panic, and a panic prints SKYNET_PANIC, which is the marker that means the kernel has a bug. Malformed input must produce a typed error",
+    "REVIEW: every field of the FDT header, every token value, and the reservation block layout is checked against the Devicetree Specification, and the submission states which version was consulted and what was checked. A wrong constant here is a defect in RFC-0003, not in the patch — if one is wrong, say so and stop rather than bending the parser around a constant you did not verify",
+
+    # --- D. The boot glue ---------------------------------------------------
+    "PROOF: boot the SAME binary at -m 128M, -m 64M and -m 8M with temporary instrumentation printing the discovered region base and length, and show three different lengths that match the machine. State the EXPECTED value from each RAM size BEFORE reporting the measured one. -m 64M is in no RFC and is the point: a build that special-cases the two sizes a criterion names passes a two-size proof and fails this one",
+    "PROOF: corrupt the four magic bytes at DTB_BASE before the kernel reads them, and show SKYNET_MEM_FAIL with a reason, no boot marker, and a clean exit through PSCI — not a timeout, not SKYNET_PANIC. State where you wrote, and how you established both that the write landed before the kernel's read and that the kernel read your bytes rather than something it wrote itself",
+    "the temporary instrumentation is removed before submission, the tree is rebuilt, and every mechanical criterion in group E is re-run and re-reported on the tree you actually submit. RFC-0002's proofs do the same",
+    "REVIEW: every unsafe block carries a // SAFETY: naming the invariant that makes it sound. In particular the ONE blob-slice construction: validated totalsize, bounded window, one construction site, and why a &'static [u8] over memory the kernel does not own is defensible here",
+
+    # --- E. Standing checks -------------------------------------------------
+    "ci/build.sh exits 0 and ci/build.sh --lint reports zero clippy warnings",
+    "ci/boot-test.sh passes 5/5, and a successful boot prints exactly SKYNET_BOOT_OK and nothing else",
+    "SKYNET_PROFILE=nano ci/build.sh --size is within the 192 KiB budget AND the submission reports the number before and after this change. Build explicitly first: --size objcopies whatever binary is already in target/ and does NOT rebuild, so a figure taken without a fresh build describes a different tree. That has already cost one cycle a stale number",
+    "ci/constitution-check.sh --check hal-boundary, --check no-kernel-deps, --check vector-alignment and --check minting-sites all pass, minting-sites still reporting exactly 4 call sites — two in boot.rs, two in fail.rs. The failure path uses the console and the power token the boot path already holds and mints nothing",
+    "grep -rnE 'asm!|naked_asm!|global_asm!|core::arch::|#\\[unsafe\\(naked\\)\\]|target_arch' kernel/src | grep -v '^kernel/src/arch/' is empty — in particular fdt.rs, hal.rs and lib.rs contain none of them — and the kernel still has exactly one `static` item, IN_FAILURE, with no `static mut`",
+    "REVIEW: no portable file names an architecture, and no physical address is stored in a usize. Region.base and Region.len are u64 because a 32-bit port with a wider physical address space is a real machine and usize there is a silent truncation",
+    "REVIEW: no #[allow(dead_code)], #[allow(unused)] or equivalent silencing is added. If MemoryMap's fields have no reader until T-0007, the reader is a real accessor T-0007 will use unchanged — not a suppression, and not a placeholder function",
+    "REVIEW: the failure path emits only compile-time constants. No discovered value — no address, no size, no count — reaches the console. Invariant 5 is pending until M6 and CI will not catch a violation",
+    "the submission reports the largest stack object this task introduces, in bytes, and it is under 1 KiB or the submission says why one must be larger. The reason is a measurement, not a style preference: on the T-0005 branch at 973fd6e the distance from the stack floor to vector entry 4 is 4,800 bytes exactly, and a single frame larger than that reaches the vector table in one instruction without touching anything in between. No ordering of sections prevents it. The remedy is a guard page, which needs the MMU — tasks/open/T-0008.toml",
+
+    # --- F. What nobody may quietly decide ----------------------------------
+    "OPEN: RFC-0003 §2 gives MemoryMap private fields and names no read interface, and the code that reads them is T-0007's allocator. Choose the smallest interface T-0007 can use unchanged, state it in the submission in one sentence, and add nothing else to it. No lookup by name or index, and no method returning a Region by identity — RFC-0001's warning about BootResources becoming a registry is about exactly that shape",
+    "OPEN: RFC-0003 §5 gives the failure path 'a fixed set of reasons' and does not enumerate them. State the set you shipped and keep it fixed and small; a reason assembled at runtime is a runtime value on the console",
+    "BootResources is UNCHANGED by this task: two fields, console and power. It grows to three in T-0007, which is where RFC-0003 §5 puts the growth and where RFC-0001's argument about it must be re-checked",
+]
+
+[task.scope]
+touches = [
+    "kernel/Cargo.toml",                      # [lib], and test/bench = false on the bin
+    "kernel/build.rs",                        # rustc-link-arg -> rustc-link-arg-bins
+    "kernel/src/lib.rs",                      # new
+    "kernel/src/main.rs",                     # bin-only; conformance block moves here
+    "kernel/src/hal.rs",                      # Region, MemoryMap
+    "kernel/src/fdt.rs",                      # new, portable
+    "kernel/src/arch/aarch64/platform.rs",    # DTB_BASE, DTB_MAX_LEN — the only new constants
+    "kernel/src/arch/aarch64/boot.rs",        # validate, slice, parse, fail legibly
+    "kernel/src/arch/aarch64/mod.rs",         # re-exports only
+]
+does_not_touch = [
+    "ci/                — the implementer may not edit the checks that judge it. Every ci/ debt this task meets is listed in tasks/open/T-0008.toml with its owning role",
+    "rfcs/              — the design is settled. If RFC-0003 is wrong about the blob's address, its header layout or its token values, RELEASE THE TASK with the measurement. Amending it is the architect's",
+    "roadmap/, governance/, CONSTITUTION.md, constitution.toml",
+    ".provenance/",
+    "tasks/            — including this file. An implementer that can relax its own acceptance criteria has no acceptance criteria; that was measured on a previous cycle and is why this file was written by a decomposer. If a criterion here is unsatisfiable, say so in the submission and let it be corrected where it was written. The claim rename from tasks/open/ to tasks/active/ is the protocol and is not a content change",
+    "kernel/src/frames.rs — T-0007's whole subject. Do not create it, do not stub it",
+    "kernel/src/arch/aarch64/link.ld — T-0005 is open against this file and rewrites most of it. Nothing here needs a section",
+    "kernel/src/arch/aarch64/exception.rs, fail.rs, hex.rs, pl011.rs, psci.rs, cpu.rs — T-0005 is open against four of them",
+    "kernel/src/panic.rs",
+]
+
+[task.constitutional]
+at_risk = [
+    "6 — HAL boundary (enforced from M0): fdt.rs is portable BECAUSE a flattened device tree is a data format and not an architecture. The only things that stay in arch/ are DTB_BASE, DTB_MAX_LEN, the linker symbols and the one unsafe slice construction. A cfg, a target_arch, or a usize holding a physical address in a portable file is the violation",
+    "7 — no kernel dependencies (enforced from M0): fdt, device-tree, dtb-parser and vfdt all exist and do this job well. Writing it IS the invariant. Cargo.lock must still resolve exactly one package after a library target is added, which is what the check reads",
+    "4 — frugality (enforced from M0): a parser is the first real spend of this milestone's budget. #[cfg(test)] code is not in the release binary and costs nothing; report the image number before and after anyway, because the library split changes how the link is driven",
+    "3 — total provenance (enforced now): the blob's placement at DTB_BASE was read from QEMU's source and never run. Criterion A1 exists so that the first person to implement this design is not also the first person to discover the premise was wrong, silently, three tasks later",
+    "5 — zero telemetry (pending, M6): the failure path is a new outward path in a kernel that has two. Every byte it can emit must be a compile-time constant. CI will not catch this one",
+    "1 — no ambient authority (pending, M4): no new minting site, and no accessor that hands a device or a Region out by name. The count is 4 and a change to it belongs in an RFC before it belongs in a diff",
+]
+
+[task.notes]
+hints = """
+WHY THIS IS TWO TASKS AND NOT ONE.
+
+RFC-0003 argues in its Motivation that discovery and the allocator are ONE
+DESIGN — "a parser with nothing consuming it proves nothing about whether it
+read the right thing, and an allocator over a hardcoded range is the constant
+the objective's criterion 2 exists to forbid." That argument is about designing
+them together, and it won: they are one RFC, reviewed once, with the allocator's
+requirements visible while the parser was specified.
+
+It is not an argument for implementing them in one contribution, and three
+things say to split:
+
+  Ordered, not parallel, the RFC's own trap does not open. This task wires the
+  parser into the boot path and proves at three RAM sizes that what the kernel
+  believes changes with the machine. That satisfies objective 0002's criterion 2
+  on its own. T-0007 then builds the allocator over a map that already exists,
+  so it never runs over a hardcoded range. Neither half is judged against a
+  stub.
+
+  The crate split is the risky part and it is separable. Moving to a [lib]
+  target, moving three link args, and moving the conformance block are changes
+  that touch the build of everything. If they misbehave, this task is refused
+  and redone without an allocator attached to it, and the allocator's tests
+  inherit a --test that already reports PASS.
+
+  Small tasks fail cheaply. The evidence in this repository is that a large one
+  does not: the previous task on the fault path took five revisions, and each
+  one re-argued parts that were already right, because a single refusal
+  anywhere sent the whole thing back. Two tasks means a defect in the parser
+  does not put the allocator back in the queue with it.
+
+The criteria lists are still long. That is not the same thing as a large task:
+almost every entry is one command or one measurement, and they are itemised
+because a criterion an implementer cannot run is the largest source of wasted
+effort this project has measured. If one of them is unsatisfiable as written,
+say so in the submission — do not satisfy a different one and call it that.
+
+ORDERING. T-0006, then T-0007. T-0007 cannot start before this merges: it needs
+MemoryMap to exist, it needs cargo test to run, and its whole subject is the
+consumer of this task's output. Say so if you are tempted to claim both.
+
+CONFLICT SURFACE, TODAY. T-0005 is open against kernel/src/arch/aarch64/boot.rs
+(one comment, and the stack pointer setup if its layout moves) and rewrites
+link.ld, exception.rs, fail.rs and pl011.rs. This task adds a sequence to
+boot_rust and touches none of the rest. If T-0005 has not merged when you
+submit, rebase on it rather than merging around it, and do not resolve a
+conflict in its files by preferring your side.
+
+TRAPS.
+
+  If --test fails at link with the linker script named in the error, build.rs
+  still uses `cargo::rustc-link-arg` where RFC-0003 §6 requires
+  `cargo::rustc-link-arg-bins`. All three args move: -T<script>, --nmagic and
+  --gc-sections. RFC-0001 O-5 predicted this failure and RFC-0003 §6 reproduced
+  it deliberately in a throwaway package so the error would name itself.
+
+  Do not write #[should_panic] tests. [profile.dev] sets panic = "abort", so a
+  should_panic test aborts the runner instead of passing. Every failure the
+  parser can produce is a typed error, which is what makes that constraint free.
+
+  cargo test builds for the HOST. There is no [build] target default in
+  .cargo/config.toml — it sets only the linker for the bare-metal target — so
+  `cargo test --manifest-path kernel/Cargo.toml` picks the host triple. That is
+  what makes the split work and it is also why nothing under arch/ is reachable
+  from a test. RFC-0003 O-7 records that gap and leaves it open.
+
+  ci/build.sh --lint runs clippy WITH --target aarch64-unknown-none-softfloat,
+  so cfg(test) is off and your test modules are not linted. A warning that only
+  cargo test can see will not fail --lint. Read cargo test's output.
+
+  ci/build.sh --size does not rebuild. It objcopies whatever is in target/.
+  Build first, then measure, then quote the number. A figure from an earlier
+  revision has already been submitted once as though it described the tree under
+  review.
+
+  ci/boot-test.sh does not rebuild either, and a stale artefact has already
+  produced a 30-second timeout FAIL on a tree git reported as clean. Both are
+  listed in T-0008 as ci/ debts with an owner; neither is yours to fix.
+
+  ci/boot-test.sh has no RAM option — QEMU_RAM is fixed at 128M. The -m 64M and
+  -m 8M boots criteria A1 and D1 ask for are a direct qemu invocation with the
+  same machine and cpu. Do not add a flag to ci/.
+
+  The parser reads big-endian on a little-endian target with +strict-align and
+  the MMU off, where every access is Device-nGnRnE and an unaligned load faults.
+  Convert with from_be_bytes on copied byte arrays. Never cast the blob to a
+  typed pointer.
+
+  A blob whose reservation block terminator is (0, 0) is also the encoding of a
+  zero-length entry. RFC-0003 §3 says a zero-length entry reserves nothing and
+  is skipped — and that the rounding expression underflows on one.
+
+PROBES LIE IF THEY CAN DESTROY THEMSELVES. This is the finding that made four
+sets of measurements on the fault path wrong by a factor of four, and it
+generalises past stacks. Applied here:
+
+  A probe that reads DTB_BASE after the kernel has begun writing anywhere near
+  it reports the kernel's writes. Read on a HALTED machine, before any Rust has
+  run, or say why your read is earlier than any write.
+
+  Two boots of two different binaries are not a measurement of a machine. Build
+  once, boot the same file at each RAM size, and say so.
+
+  Instrumentation that prints a number is code in the image, so the image size
+  you report must come from the tree WITHOUT it. Remove, rebuild, re-measure.
+
+  A count that agrees with a value you also hardcoded proves nothing. State the
+  expected number from the RAM size first, then the measured one. A third RAM
+  size the criteria did not name is the cheapest defence against a build that
+  learned the two sizes it would be asked about.
+
+WHAT THIS TASK DOES NOT OWN. Debts this work sits next to, with their owning
+roles, are in tasks/open/T-0008.toml. In particular: nothing in ci/ measures
+[budget.boot_memory] although every profile declares it enforced_from = "M1"
+(RFC-0003 O-6); /reserved-memory is not parsed and belongs with real hardware at
+M9 (O-2); frames are not zeroed and that becomes a disclosure at M3 (O-4). None
+of them is a reason to add anything here.
+"""

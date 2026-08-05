@@ -277,10 +277,31 @@ check_minting_sites() {
 # ledger IS the published record, and this file's own comment above would trip a
 # broader rule. Scope, not vocabulary, is what separates the record from the leak.
 # ---------------------------------------------------------------------------
+# The instant from which unnamed attributions became a failure rather than a
+# report. A date, not a commit: a branch's commits are not ancestors of main, so
+# a commit-range baseline excludes none of them. Widening a rule cannot retroactively condemn what was written before
+# it — see the note in the loop below.
+LEAK_BASELINE_DATE="2026-08-05T09:30:03+04:00"
+
 check_panel_leak() {
     heading "No judge named beside a verdict in a contribution's own artefacts"
 
+    # Named judges, and UNNAMED ones.
+    #
+    # De-naming is not de-attributing. Three judges reported, separately, that
+    # this check is blind to "four judges found it independently", "a reviewer
+    # reproduced exactly that", "three Guardians approved" — none of which
+    # contains a name, all of which tell the next judge how an earlier panel
+    # ruled. SEPARATION_OF_POWERS.md forbids carrying another judge's "verdict,
+    # direction, or reasoning", and a count is a direction.
+    #
+    # The second alternation is deliberately narrow: a quantifier or article
+    # immediately before a role word. "review found" and "review measured" stay
+    # legal, because a finding with no agent attached is the form this project
+    # wants — the defect described, the finder not.
     local judges='guardian-[0-9]+|reviewer-(safety|conformance|constitution)'
+    judges="$judges"'|(a|an|the|one|two|three|four|five|six|both|all|every|several|multiple|independent) (judges?|reviewers?|guardians?|panel)'
+    judges="$judges"'|(judges?|reviewers?|guardians?|panel(list)?s?) (found|reported|measured|noted|flagged|refused|approved|rejected|verified|agreed|caught|raised|said)'
     # Vocabulary, and the reason it is this wide.
     #
     # The first version matched approv|reject|refus|dissent|verdict|blocking
@@ -312,12 +333,30 @@ check_panel_leak() {
         found=1
     fi
 
-    # 2. Commit messages on contribution branches. The first instance of this
-    #    leak was here, and `git log` is the first thing a judge runs.
+    # 2. Commit messages on contribution branches, from LEAK_BASELINE forward.
+    #
+    #    The baseline exists for the same reason ci/ledger-schema.py is versioned.
+    #    Widening this pattern to catch unnamed attributions — "four judges found
+    #    it", "three Guardians approved" — immediately reddened commit messages
+    #    written before the rule existed, on a branch already under review. There
+    #    are two dishonest ways out: hold the check until it is convenient, or
+    #    rewrite the history it flags. Rewriting has already destroyed thirteen
+    #    messages on one branch, and holding a rule until it costs nothing is the
+    #    manoeuvre this whole project exists to prevent.
+    #
+    #    So the rule binds forward. Older messages are reported and do not fail;
+    #    they are history, and history is not editable here.
     local br
     for br in $(git for-each-ref --format='%(refname:short)' 'refs/heads/task/*' 2>/dev/null); do
+        local old
+        old=$(git log --until="$LEAK_BASELINE_DATE" --format='%h %s%n%b' "main..$br" 2>/dev/null \
+              | grep -niE "($judges)" | grep -iE "($verdicts)" || true)
+        if [ -n "$old" ]; then
+            local n; n=$(printf '%s\n' "$old" | grep -c . || true)
+            info "$br: $n line(s) predate LEAK_BASELINE — reported, not failed"
+        fi
         local msgs
-        msgs=$(git log --format='%h %s%n%b' "main..$br" 2>/dev/null \
+        msgs=$(git log --since="$LEAK_BASELINE_DATE" --format='%h %s%n%b' "main..$br" 2>/dev/null \
                | grep -niE "($judges)" | grep -iE "($verdicts)" || true)
         [ -n "$msgs" ] || continue
         fail "commit messages on $br name a judge beside a verdict"

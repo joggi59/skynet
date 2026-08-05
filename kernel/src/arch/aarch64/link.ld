@@ -52,8 +52,18 @@
 
 ENTRY(_start)
 
-KERNEL_BASE = 0x40080000;   /* QEMU virt RAM base + 512 KiB, leaving the low
-                               region for the device tree QEMU builds. */
+KERNEL_BASE = 0x40080000;   /* QEMU virt RAM base + 512 KiB.
+                             *
+                             * The offset follows the aarch64 Linux boot
+                             * protocol's convention. It does NOT leave room for
+                             * a device tree, which is what this comment used to
+                             * say: dumping 0x40000000 on a halted machine gives
+                             * zeros at every RAM size, x0 is zero, and QEMU
+                             * builds a 1 MiB blob for `virt` that it never
+                             * places in guest memory for an ELF `-kernel`.
+                             * Established by T-0006's first acceptance
+                             * criterion, which released the task rather than
+                             * work around it. Ledger, event `correction`. */
 STACK_SIZE  = 0x10000;      /* 64 KiB */
 
 SECTIONS

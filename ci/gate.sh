@@ -97,6 +97,51 @@ cond_kprov()     { heading "10c. Kernel provenance";  _absorb ci/constitution-ch
 # merged the check itself.
 cond_leak()      { heading "8b. Panel independence"; _absorb ci/constitution-check.sh --check panel-leak; }
 
+# 11. The task board has to survive the merge.
+#
+# There was no step that moved a task out of `tasks/active/` when its work
+# landed, and no file said there should be. Measured on the tree: of three
+# merged tasks, ONE reached `tasks/done/` — by a hand-written commit — and two
+# were still advertised as in flight long after their code was on main. So the
+# board told `tasks_list` that finished work was claimable, which is the one
+# lie a contribution board cannot afford once agents outside this machine read
+# it over MCP.
+#
+# It is the gate's job and nobody else's, for the same reason the gate writes
+# the ledger: the gate is the only thing that knows a merge happened, and it is
+# a script rather than a role that can forget. A step that lives only in an
+# orchestrator's habits has a measured failure rate of two in three.
+#
+# This is a PRECONDITION and not a post-merge tidy-up. Checked before anything
+# is written, a missing task file refuses the merge; checked after, it leaves a
+# valid merge recorded beside a board nobody updated, and the only remedies are
+# undoing a good merge or printing a warning — and a printed warning is how
+# every fail-open in this repository started.
+cond_board() {
+    heading "11. Task board"
+    local f found=""
+    for f in "tasks/active/$C_TASK.toml" "tasks/open/$C_TASK.toml"; do
+        git cat-file -e "$C_BRANCH:$f" 2>/dev/null && { found="$f"; break; }
+    done
+    if [ -z "$found" ]; then
+        fail "$C_TASK has no task file on $C_BRANCH under tasks/active/ or tasks/open/"
+        detail "the gate moves it to tasks/done/ after merging, and cannot move what it cannot find"
+        return 1
+    fi
+    # Retirement is a property of MAIN, not of the branch. The first version of
+    # this asked the branch whether the task was already done, and the branch is
+    # the one place that cannot know: a branch cut before the retirement carries
+    # the task at active/ no matter what main did afterwards. Tested against a
+    # contribution whose task main had already retired, and it passed — a guard
+    # that guards nothing, in the commit that added it.
+    if git cat-file -e "HEAD:tasks/done/$C_TASK.toml" 2>/dev/null; then
+        fail "$C_TASK is already retired on main — this contribution works against a finished task"
+        detail "if the task was reopened, it must be moved back out of tasks/done/ first, in its own commit"
+        return 1
+    fi
+    pass "$C_TASK is at $found and will move to tasks/done/ on merge"
+}
+
 # Run a sub-check in the contribution's worktree, echo its per-check lines, and
 # fold its tallies into ours. The sub-scripts already speak PASS/FAIL/PENDING;
 # we count what they printed rather than re-deriving it, so there is exactly one
@@ -360,7 +405,33 @@ do_merge() {
         fail "could not commit the ledger — the merge was undone"
         return 1
     fi
-    pass "merged as $(git rev-parse --short "$merged"), ledger appended as $(git rev-parse --short HEAD)"
+    # ---- 4. Retire the task, as its own commit ----------------------------
+    #
+    # cond_board proved the file exists on the branch and is not already in
+    # done/, so by here the only way this fails is a path the merge itself
+    # moved. That is worth failing on rather than shrugging at: a board that
+    # disagrees with the ledger is the disagreement an outside agent will act
+    # on, and it is cheaper to refuse loudly here than to discover it from a
+    # duplicate claim.
+    local tf=""
+    for tf in "tasks/active/$C_TASK.toml" "tasks/open/$C_TASK.toml"; do
+        [ -f "$REPO_ROOT/$tf" ] && break || tf=""
+    done
+    if [ -z "$tf" ]; then
+        fail "merged, but $C_TASK's task file is at neither tasks/active/ nor tasks/open/"
+        detail "the merge is recorded; the board is not. Move it by hand and say so in the ledger"
+        return 1
+    fi
+    mkdir -p "$REPO_ROOT/tasks/done"
+    if ! git mv "$tf" "tasks/done/$C_TASK.toml" 2>/dev/null; then
+        fail "could not move $tf to tasks/done/"
+        return 1
+    fi
+    if ! git commit -q -m "$C_TASK: done — merged as $C_ID"; then
+        fail "could not commit the task retirement — main now disagrees with the board"
+        return 1
+    fi
+    pass "merged as $(git rev-parse --short "$merged"), ledger appended, $C_TASK retired to tasks/done/"
 }
 
 # ---------------------------------------------------------------------------
@@ -501,6 +572,7 @@ run_all() {
     cond_build; cond_lint; cond_tests; cond_boot
     cond_budgets; cond_hal; cond_deps; cond_authority
     cond_reviewers; cond_leak; cond_guardian; cond_provenance; cond_ledger; cond_kprov
+    cond_board
 
     echo
     if [ "$CHECKS_FAIL" -gt 0 ]; then
@@ -535,7 +607,7 @@ main() {
                         boot) cond_boot ;; budgets) cond_budgets ;; hal) cond_hal ;;
                         deps) cond_deps ;; authority) cond_authority ;;
                         ledger) cond_ledger ;; kernel-provenance) cond_kprov ;;
-                        panel-leak) cond_leak ;;
+                        panel-leak) cond_leak ;; board) cond_board ;;
                         reviewers) cond_reviewers ;;
                         guardian) cond_guardian ;; provenance) cond_provenance ;;
                         *) die "unknown condition '$2' (try --list)" ;;

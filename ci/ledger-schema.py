@@ -121,6 +121,26 @@ if version == 0:
     if event != "merge" and not any(f in entry for f in V0_PROSE):
         fail(f"event {event!r} (schema 0) explains itself nowhere: expected one of "
              + ", ".join(V0_PROSE))
+    # A MERGE may not claim that nobody reviewed and nobody judged.
+    #
+    # Omitting `schema` opted an entry into this branch, which checked presence
+    # and not content — so a merge declaring `reviewer_verdicts: []` and
+    # `guardian_verdicts: []` validated with exit 0. That is the single worst
+    # thing this file could accept, and review demonstrated it accepting it twice.
+    #
+    # Scoped to merges and to the two verdict lists, because a wider check does
+    # break history and the first attempt at it did: the genesis line carries an
+    # empty `merged_at` and empty verdict lists, and lines 4 through 8 carry the
+    # empty verdict lists this schema was written to stop being demanded of them.
+    # A merge is the only event for which those lists are a claim rather than
+    # padding. That was measured against the file before this comment was written,
+    # which is not how the previous version of this comment got made.
+    if event == "merge":
+        hollow = [f for f in ("reviewer_verdicts", "guardian_verdicts")
+                  if not entry.get(f)]
+        if hollow:
+            fail("a merge entry claims nobody reviewed or nobody judged: "
+                 + ", ".join(hollow) + " is empty")
     sys.exit(0)
 
 missing = [f for f in V1_COMMON + V1_EVENT[event] if f not in entry]

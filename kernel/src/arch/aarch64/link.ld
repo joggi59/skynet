@@ -188,9 +188,14 @@ SECTIONS
      * other ASSERTs, the alignment check, the size budget at 36% and the boot
      * test with a clean PSCI shutdown are every one of them green. */
     /* `.text` below everything the failure path does NOT need. Moving it under
-     * `.bss` links, passes every other ASSERT and every check, and drops the
-     * distance from the stack floor to `bl fault_stop` from 84 bytes to 12 —
-     * the report dies four times sooner with nothing to say so. */
+     * `.bss` links, passes every other ASSERT and every check, and collapses the
+     * distance from the stack floor to `bl fault_stop` — the report dies sooner
+     * with nothing to say so.
+     *
+     * No figure here. The previous version quoted one, in the file whose header
+     * says distances are derived and not written down, and the figure was wrong:
+     * review measured the distance as four bytes where this comment claimed
+     * eighty-four. `objdump -h` and `nm` give it. */
     ASSERT(ADDR(.text) < ADDR(.got),
            "code is above data the failure path does not need: the distance from the stack to the last instruction of .text collapses, and no other check sees it")
     ASSERT(ADDR(.stack) > ADDR(.text),

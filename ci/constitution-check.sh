@@ -301,7 +301,14 @@ check_panel_leak() {
     # wants — the defect described, the finder not.
     local judges='guardian-[0-9]+|reviewer-(safety|conformance|constitution)'
     judges="$judges"'|(a|an|the|one|two|three|four|five|six|both|all|every|several|multiple|independent) (judges?|reviewers?|guardians?|panel)'
-    judges="$judges"'|(judges?|reviewers?|guardians?|panel(list)?s?) (found|reported|measured|noted|flagged|refused|approved|rejected|verified|agreed|caught|raised|said)'
+
+    # A role word beside a finding verb is an attribution ON ITS OWN, and needs
+    # no verdict word to pair with. "Two judges found it independently" sat green
+    # past the baseline for exactly that reason: `found` was in this pattern and
+    # not in the verdict one, so there was nothing for it to match against.
+    # Sentences of this shape are matched separately, below.
+    local selfstanding='(a|an|the|one|two|three|four|five|six|both|all|every|several|multiple|independent) +(judges?|reviewers?|guardians?|panel(list)?s?) +(found|reported|measured|noted|flagged|refused|approved|rejected|verified|agreed|caught|raised|said|demonstrated|disagreed)'
+    selfstanding="$selfstanding"'|(judges?|reviewers?|guardians?|panel(list)?s?) +(found|reported|measured|refused|approved|rejected|demonstrated|disagreed) +(it|that|this|the)'
     # Vocabulary, and the reason it is this wide.
     #
     # The first version matched approv|reject|refus|dissent|verdict|blocking
@@ -330,8 +337,11 @@ check_panel_leak() {
     #    Pre-existing matches are reported so they do not vanish.
     local hits pre
     if git rev-parse --verify --quiet main >/dev/null 2>&1 && [ -n "${SKYNET_BASE:-main}" ]; then
+        # Added lines, joined per hunk for the same reason as above: an
+        # attribution split across two added lines is one sentence, not two.
         hits=$(git diff "${SKYNET_BASE:-main}...HEAD" -- tasks/ kernel/ 2>/dev/null \
-               | grep '^+' | grep -v '^+++' | sed 's/^+//' \
+               | grep -E '^(\+|@@)' | grep -v '^+++' | sed 's/^+//' \
+               | awk '/^@@/ { if (buf!="") print buf; buf=""; next } { buf = buf " " $0 } END { if (buf!="") print buf }' \
                | grep -niE "($judges)" | grep -iE "($verdicts)" || true)
         pre=$(grep -rniE "($judges)" tasks/ kernel/ 2>/dev/null \
               | grep -v '^kernel/target/' | grep -iE "($verdicts)" | grep -c . || true)
@@ -370,8 +380,21 @@ check_panel_leak() {
             info "$br: $n line(s) predate LEAK_BASELINE — reported, not failed"
         fi
         local msgs
-        msgs=$(git log --since="$LEAK_BASELINE_DATE" --format='%h %s%n%b' "main..$br" 2>/dev/null \
+        # Joined into paragraphs before matching, not read line by line.
+        #
+        # A judge found "Two judges found it independently" sitting past the
+        # baseline and green, because the role word and the verdict word landed
+        # on either side of a line break and both greps are per-line. Three
+        # earlier misses have the same cause. Prose wraps; the rule is about the
+        # sentence, so the text is unwrapped before the rule is applied.
+        msgs=$(git log --since="$LEAK_BASELINE_DATE" --format='%h %s%n%b%n@@' "main..$br" 2>/dev/null \
+               | awk '{ if ($0=="@@") { print buf; buf="" } else { buf = buf " " $0 } } END { print buf }' \
                | grep -niE "($judges)" | grep -iE "($verdicts)" || true)
+        msgs="$msgs
+$(git log --since="$LEAK_BASELINE_DATE" --format='%h %s%n%b%n@@' "main..$br" 2>/dev/null \
+  | awk '{ if ($0=="@@") { print buf; buf="" } else { buf = buf " " $0 } } END { print buf }' \
+  | grep -niE "($selfstanding)" || true)"
+        msgs=$(printf '%s\n' "$msgs" | grep -v '^$' || true)
         [ -n "$msgs" ] || continue
         fail "commit messages on $br name a judge beside a verdict"
         while IFS= read -r m; do detail "$m"; done <<< "$msgs"

@@ -85,7 +85,7 @@ criteria = [
     "PROOF: at -m 8M, allocate the ENTIRE pool and check every frame handed out against all four reservation sources. 2,048 frames is small enough to check exhaustively and this is the honest form of 'the allocator never hands out memory that is spoken for'. Report how many frames were reserved and how many were handed out; the two plus the bitmap's own must equal total()",
     "PROOF: any failure in the discovery-through-placement sequence writes SKYNET_MEM_FAIL with a reason, no boot marker, and exits cleanly through PSCI. Show at least the bitmap-placement failure reaching it",
     "the temporary instrumentation is removed before submission, the tree is rebuilt, and every mechanical criterion in group D is re-run and re-reported on the tree you actually submit",
-    "the submission reports TWO numbers at each of the three RAM sizes: the bitmap's size in bytes, against nano's [budget.boot_memory] max_bytes = 1048576, and the measured bitmap_end address. The first is the first boot memory this kernel has ever owned that depends on the machine rather than on the link, and nothing in ci/ measures it (RFC-0003 O-6). The second is what RFC-0003 §7 hands the next design — whatever maps the kernel must map [KERNEL_BASE, bitmap_end), not [KERNEL_BASE, __kernel_end). Neither number is written down anywhere today",
+    "the submission reports TWO numbers at each of the three RAM sizes, FOR THE TREE IT SUBMITS and not for the instrumented build: the bitmap's size in bytes, against nano's [budget.boot_memory] max_bytes = 1048576, and bitmap_end. The first is the first boot memory this kernel has ever owned that depends on the machine rather than on the link, and nothing in ci/ measures it (RFC-0003 O-6). The second is what RFC-0003 §7 hands the next design — whatever maps the kernel must map [KERNEL_BASE, bitmap_end), not [KERNEL_BASE, __kernel_end). Neither is written down anywhere today. State which build each number came from: instrumentation is bytes in .text, __kernel_end sits above .text, and the bitmap sits above __kernel_end, so a probe that prints bitmap_end has moved bitmap_end",
 
     # --- C. The shape invariant 1 depends on --------------------------------
     "the kernel still has exactly one `static` item, IN_FAILURE, and no `static mut`. The bitmap is not a static and the allocator is not a static",
@@ -104,7 +104,7 @@ criteria = [
     "ci/constitution-check.sh --check hal-boundary, --check no-kernel-deps, --check vector-alignment and --check minting-sites all pass, minting-sites still reporting exactly 4 call sites, and readelf -S confirms .vectors is present and 2 KiB aligned rather than absent. The allocator's constructor is not a device constructor and must not become one",
     "grep -c '^\\[\\[package\\]\\]' kernel/Cargo.lock is 1, kernel/Cargo.toml declares no dependency section of any kind, and grep -rnE 'asm!|naked_asm!|global_asm!|core::arch::|#\\[unsafe\\(naked\\)\\]|target_arch' kernel/src | grep -v '^kernel/src/arch/' is empty — in particular frames.rs, hal.rs and lib.rs contain none of them",
     "REVIEW: no portable file names an architecture and no physical address is stored in a usize. Frame indices are usize; base and length are u64",
-    "the submission reports the largest stack object this task introduces, in bytes, and it is under 1 KiB or the submission says why one must be larger. On the T-0005 branch at 973fd6e the distance from the stack floor to vector entry 4 is 4,800 bytes exactly; a single frame larger than that reaches the vector table in one instruction and no ordering of sections prevents it. The remedy is a guard page, which needs the MMU — tasks/open/T-0008.toml",
+    "the submission reports the largest stack object this task introduces, in bytes, and it is under 1 KiB or the submission says why one must be larger. A single stack frame larger than the distance from __stack_top down to the vector table reaches it in ONE instruction, touching nothing in between, so nothing detects it on the way. That distance is currently between 5,000 and 5,600 bytes, and FRAME_SIZE is 4 KiB — this is the task most likely to be tempted into a frame-sized stack object. The remedy is a guard page, which needs the MMU — tasks/open/T-0008.toml",
 
     # --- E. What nobody may quietly decide ----------------------------------
     "OPEN: FRAME_SIZE is introduced here, in arch/, and RFC-0003 §7 says it must equal the translation granule the MMU design will choose — 'two constants that must agree, in two RFCs, is exactly how they come to disagree'. Define it once, in arch/, state its value, and do NOT define a second frame-size constant anywhere. The compile-time assertion that it equals the granule belongs in the RFC that introduces the granule, which does not exist yet",
@@ -199,10 +199,28 @@ TRAPS.
   code cannot present the same Frame twice, which is the property to demonstrate
   instead.
 
-PROBES LIE IF THEY CAN DESTROY THEMSELVES. The measurements on the fault path
-were wrong by a factor of four, four times, because the instrumentation wrote
-over the code that was doing the writing. The same class applies here in three
-shapes, and the criteria are worded around them:
+PROBES LIE IF THEY CAN DESTROY THEMSELVES — OR MOVE WHAT THEY MEASURE.
+
+Both halves have been paid for here. Fault-path measurements were wrong by a
+factor of four, four times, because the instrumentation wrote over the code
+doing the writing. That was fixed by relocating the writer, and the relocated
+writer was STILL wrong, because it counted from a stack floor read out of a
+previous build — and adding a probe grows .text, which moves .stack, which moves
+the floor. Eight figures were corrected one at a time across four cycles and
+nobody asked what the instrument was doing.
+
+READ THAT ONE TWICE BEFORE MEASURING bitmap_end. It is the same mechanism,
+pointed at this task. The bitmap goes at the first frame boundary at or above
+__kernel_end; __kernel_end sits above every section; instrumentation is bytes in
+.text. So a printf that reports bitmap_end has moved bitmap_end. The number you
+measure with the probe in is not the number of the tree you submit, and the
+criterion asks for the second. Measure the instrumented value if it helps you
+debug, then derive or re-read the submitted tree's value from the built image —
+and say which one you are quoting.
+
+The general form: instrumentation is bytes in the image, and bytes in the image
+move every symbol above them. If what you are measuring is a distance to a
+symbol, the instrument is inside the experiment. The other shapes here:
 
   An allocator that reports its own total from a constant agrees with itself
   perfectly. State the expected frame count from the RAM size BEFORE you print

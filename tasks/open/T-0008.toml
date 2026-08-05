@@ -52,11 +52,11 @@ produced them.
 # Not criteria for an implementer. These are what would DISCHARGE each debt, so
 # that a future design can be checked against them rather than argued with.
 criteria = [
-    "BLOCKED: an overrun of 3,280 to 4,700 bytes below the stack floor takes exactly four exceptions and then stops dead with an empty console and exit 124. The exceptions are bounded — the ladder works — and bounding them did not buy a report, because the overrun destroyed the failure path's own code. A design discharges this when an overrun at any depth produces either a report or a fault that cannot be reached by further overrun",
-    "BLOCKED: an overrun of about 4,800 bytes or more destroys vector entry 4 and storms. A design discharges this when destroying the vector table is impossible rather than merely distant",
-    "BLOCKED: a SINGLE stack frame larger than the distance to the vector table reaches it in one instruction, touching nothing in between. That is ordinary Rust — a 4 KiB buffer plus the frame around it clears 4,800 bytes — and no ordering of sections prevents it, because nothing is crossed. A design discharges this when the page below the stack is unmapped, so the frame's first write faults instead of landing",
-    "BLOCKED: the three measurements above were taken on the T-0005 branch at 973fd6e, which has not merged. They are layout-dependent: every one of them is a distance from the stack floor to a section, and the sections move. Whoever picks this up re-measures on the merged tree before quoting a number",
-    "BLOCKED: the measurement instrument is part of the record. Every earlier figure on this path was wrong — by a factor of four, four times — because the writing loop wrote over its own code and reported the address where it died rather than the depth it was asked for. The numbers above were taken with the writer relocated to 0x44100000, outside everything it destroys. A measurement here is honest when the thing doing the writing cannot be destroyed by the writes",
+    "BLOCKED: an overrun of roughly 3,600 to 5,000 bytes below __stack_top takes exactly four exceptions and then stops dead with an empty console and exit 124. The exceptions are bounded — the ladder works — and bounding them did not buy a report, because the overrun destroyed the failure path's own code. A design discharges this when an overrun at any depth produces either a report or a fault that cannot be reached by further overrun",
+    "BLOCKED: an overrun somewhere between 5,000 and 5,600 bytes destroys vector entry 4 and storms. A design discharges this when destroying the vector table is impossible rather than merely distant",
+    "BLOCKED: a SINGLE stack frame larger than the distance from __stack_top to the vector table reaches it in one instruction, touching nothing in between. That is ordinary Rust — a 4 KiB buffer plus the frame around it clears every distance measured here — and no ordering of sections prevents it, because nothing is crossed. A design discharges this when the page below the stack is unmapped, so the frame's first write faults instead of landing",
+    "BLOCKED: every number above is a DEPTH BELOW __stack_top, not an address, and it is a property of the image that was booted. The distances are section-to-section, the sections move when the image changes, and the image changes when anything is added to it — including the instrument. Whoever picks this up re-measures rather than quoting these, and derives the floor from the __stack_top symbol at run time",
+    "BLOCKED: the instrument is part of the record, and this path has now been wrong about it twice. First: a writing loop that wrote over its own code reported the address where it died rather than the depth it was asked for, which made four sets of figures wrong by a factor of four, and was fixed by relocating the writer to 0x44100000. Second: the relocated writer still counted from a hardcoded floor read out of a previous build, and injecting a probe grows .text, which moves .stack, which moves the floor — so every depth was written from about 150 bytes off the boundary it aimed at. Eight figures were corrected one at a time across four cycles and the instrument stayed unexamined. A measurement here is honest when the writer cannot be destroyed by its own writes AND cannot move the geometry it is measuring",
     "BLOCKED: this file is not the right artefact and should not survive. It is discharged by being deleted, once the debts below have somewhere to live that a merge cannot sweep away — see [task.notes]",
 ]
 
@@ -66,67 +66,74 @@ criteria = [
 # ---------------------------------------------------------------------------
 [task.debts.stack]
 owner = "architect — the MMU design, objective 0002 criterion 4"
-measured_on = "task/T-0005 at 973fd6e, with the writing loop relocated to 0x44100000"
+measured_on = "task/T-0005, writing loop relocated to 0x44100000, floor derived from the __stack_top symbol at run time"
+supersedes = """
+The published table said 3,264 / 3,280 / 4,800 and every one of those figures is
+false. .provenance/ledger.jsonl carries the correction as an entry of its own,
+event "correction", and the numbers below are that entry's. Do not quote the old
+ones from link.ld on the unmerged branch: they are still in the tree there, and
+the branch is pinned under review.
+"""
 layout = """
-From objdump -h on that tree:
+The shipped image at the time of writing, from objdump -h:
 
   .vectors   0x40080000    2012 bytes
   .guard     0x400807e0       4 bytes
   .failpath  0x400807e8      96 bytes
   .rodata    0x40080848     740 bytes
   .text      0x40080b30    2448 bytes
-  .bss       0x400814c0       0 bytes      <- the stack floor
+  .bss       0x400814c0       0 bytes
   .stack     0x400814c0   65536 bytes      __stack_top 0x400914c0
+
+Every depth below is measured DOWNWARD FROM __stack_top, in a build that
+contains the probe. It is not the same geometry as the table above, and that is
+the whole point of the correction: adding the probe grows .text, which moves
+.stack, which moves the floor.
 """
 band = """
-THE SILENT BAND. Overrun depth below the stack floor, one binary, one writer,
-outside the descent path:
+THE SILENT BAND. Overrun depth below __stack_top, one binary, one writer outside
+the descent path, floor read from the symbol rather than from a constant:
 
-    3,072 B    3 exceptions      exit 0      SKYNET_REFAULT
-    3,200 B    4 exceptions      exit 0      SKYNET_REFAULT
-    3,264 B    4 exceptions      exit 0      silent, but still powers off
-    3,280 B    4 exceptions      exit 124    silent
-    4,700 B    4 exceptions      exit 124    silent
-    4,800 B    ~3.4 million      exit 124    vector entry 4 destroyed
+        4 B    full fault report
+       16 B    full fault report
+      800 B    SKYNET_REFAULT
+    3,400 B    SKYNET_REFAULT           <- the last depth that speaks
+    3,600 B    4 exceptions, silent, exit 124
+    5,000 B    4 exceptions, silent, exit 124
+    5,600 B    storm, exit 124          <- vector entry 4 destroyed
 
-The edge is 3,280 and it is not a round number: it is where quiet_stop's `hvc`
-at 0x400807f0 is destroyed. Between 3,280 and 4,700 the machine takes exactly
-four exceptions, prints nothing at all, and hangs until the timeout kills it —
-which is, in objective 0002's own words in common_good, "a silent hang and a
-thirty-second CI timeout", the thing the objective exists to remove.
-
-Reproduced independently during review at 3,400 / 4,000 / 4,400 / 4,700: four
-exceptions, zero console bytes, exit 124, every time.
+The machine goes silent somewhere between 3,400 and 3,600 and stays bounded at
+four exceptions up to 5,000. In that band it takes four exceptions, prints
+nothing at all, and hangs until the timeout kills it — which is, in objective
+0002's own words in common_good, "a silent hang and a thirty-second CI timeout",
+the thing the objective exists to remove.
 
 It is bounded and it is not unsound. The ladder does its job. What is destroyed
 is the failure path's CODE, so nothing survives that can print or power off.
 """
 storm = """
-THE STORM. From about 4,800 bytes the ladder cannot run at all, because the
-table it lives in has been zeroed.
+THE STORM. Somewhere between 5,000 and 5,600 bytes the ladder cannot run at all,
+because the table it lives in has been zeroed. The mechanism is vector entry 4:
+zeroing it alone reproduces the storm with no overrun at all.
 
-The number is exact and structural rather than approximate: vector entry 4
-begins at 0x40080200, the stack floor is 0x400814c0, and the difference is
-0x12C0 = 4,800 bytes precisely. Zeroing vector entry 4 alone reproduces the
-storm with no overrun at all.
+Exception counts vary with the trace cap used to observe them — tens of
+thousands under a capped trace, over a million untrapped. The count is not the
+finding; the unboundedness is.
 
-Exception counts vary with the trace cap used to observe them — 17,046 under a
-3 MB capped trace, 476,626 and 1,242,260 under others, ~3.4 million untrapped.
-The count is not the finding; the unboundedness is.
-
-An earlier version of this file's source said the storm began at 5,300 bytes.
-That was wrong in the reassuring direction, which is the direction every
-distance on this path has been wrong in.
+The threshold has now been published as 5,300, then 4,800, and is now between
+5,000 and 5,600. Two of those three were wrong in the reassuring direction,
+which is the direction every distance on this path has been wrong in.
 """
 single_frame = """
-THE ONE NO ORDERING FIXES. A single stack frame larger than the distance to the
-vector table reaches it in one instruction, without touching anything in
-between. Nothing is crossed, so nothing detects it: no guard byte is written, no
-section is clipped, no exception is raised on the way.
+THE ONE NO ORDERING FIXES. A single stack frame larger than the distance from
+__stack_top to the vector table reaches it in one instruction, without touching
+anything in between. Nothing is crossed, so nothing detects it: no guard byte is
+written, no section is clipped, no exception is raised on the way.
 
 That is ordinary Rust. A 4 KiB buffer on the stack plus the frame around it
-clears 4,800 bytes. FRAME_SIZE is 4 KiB, which is not a coincidence — the first
-code to hold a frame-sized object on the stack meets this.
+clears every distance measured here. FRAME_SIZE is 4 KiB, which is not a
+coincidence — the first code to hold a frame-sized object on the stack meets
+this.
 
 The only mitigation available before the MMU is not to build large frames, which
 is why T-0006 and T-0007 each carry a criterion asking for the largest stack
@@ -135,11 +142,32 @@ not a fix. The fix is an unmapped page below the stack.
 """
 what_is_not_a_debt = """
 Stated so it is not carried forward as though it were: the residual is an
-improvement, not a regression. Before the layout work the same probe measured
-the storm threshold at 2,288 bytes and a silent exit at roughly 1,000. The
-envelope in which the machine stops by itself and says something moved from
-about 1,000 bytes to about 3,250. A plain fault that destroys nothing produces
-an identical, complete report before and after.
+improvement, not a regression. Before the layout work the same instrument
+measured the storm threshold at 2,288 bytes and a silent exit at roughly 1,000.
+The envelope in which the machine stops by itself and says something is several
+times wider now. A plain fault that destroys nothing produces an identical,
+complete report before and after.
+
+Those two comparison figures come from the OLD instrument and are subject to the
+same correction. The direction is safe — both trees were measured the same wrong
+way, so the ratio survives even though the absolute numbers do not — and that is
+the most that can honestly be claimed for them.
+"""
+the_method = """
+THE FINDING UNDER THE FINDING, and the one most likely to be needed again.
+
+A probe that changes the geometry it measures is the same class of defect as a
+probe that destroys its own writing loop. The second was found here and fixed by
+relocating the writer; the first survived that fix, because nobody asked what
+else the probe had moved.
+
+The remedy, from the ledger, generalises past this file: any probe in this
+repository that targets an address relative to the stack must derive it from
+__stack_top AT RUN TIME, never from a constant read out of a previous build.
+
+The wider form, which is what T-0006 and T-0007 inherit: instrumentation is
+bytes in the image, and bytes in the image move every symbol above them. If a
+measurement is a distance to a symbol, the instrument is inside the experiment.
 """
 
 # ---------------------------------------------------------------------------

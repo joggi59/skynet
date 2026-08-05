@@ -102,7 +102,7 @@ criteria = [
     "REVIEW: no portable file names an architecture, and no physical address is stored in a usize. Region.base and Region.len are u64 because a 32-bit port with a wider physical address space is a real machine and usize there is a silent truncation",
     "REVIEW: no #[allow(dead_code)], #[allow(unused)] or equivalent silencing is added. If MemoryMap's fields have no reader until T-0007, the reader is a real accessor T-0007 will use unchanged — not a suppression, and not a placeholder function",
     "REVIEW: the failure path emits only compile-time constants. No discovered value — no address, no size, no count — reaches the console. Invariant 5 is pending until M6 and CI will not catch a violation",
-    "the submission reports the largest stack object this task introduces, in bytes, and it is under 1 KiB or the submission says why one must be larger. The reason is a measurement, not a style preference: on the T-0005 branch at 973fd6e the distance from the stack floor to vector entry 4 is 4,800 bytes exactly, and a single frame larger than that reaches the vector table in one instruction without touching anything in between. No ordering of sections prevents it. The remedy is a guard page, which needs the MMU — tasks/open/T-0008.toml",
+    "the submission reports the largest stack object this task introduces, in bytes, and it is under 1 KiB or the submission says why one must be larger. The reason is a measurement, not a style preference: a single stack frame larger than the distance from __stack_top down to the vector table reaches it in ONE instruction, touching nothing in between, so no guard byte is written and no exception is raised on the way. That distance is currently between 5,000 and 5,600 bytes and no ordering of sections prevents the case. The remedy is a guard page, which needs the MMU — tasks/open/T-0008.toml carries the measurements",
 
     # --- F. What nobody may quietly decide ----------------------------------
     "OPEN: RFC-0003 §2 gives MemoryMap private fields and names no read interface, and the code that reads them is T-0007's allocator. Choose the smallest interface T-0007 can use unchanged, state it in the submission in one sentence, and add nothing else to it. No lookup by name or index, and no method returning a Region by identity — RFC-0001's warning about BootResources becoming a registry is about exactly that shape",
@@ -238,9 +238,20 @@ TRAPS.
   zero-length entry. RFC-0003 §3 says a zero-length entry reserves nothing and
   is skipped — and that the rounding expression underflows on one.
 
-PROBES LIE IF THEY CAN DESTROY THEMSELVES. This is the finding that made four
-sets of measurements on the fault path wrong by a factor of four, and it
-generalises past stacks. Applied here:
+PROBES LIE IF THEY CAN DESTROY THEMSELVES — OR MOVE WHAT THEY MEASURE.
+
+Both halves have now been paid for on this project. A writing loop that wrote
+over its own code reported where it died rather than the depth it was asked for,
+which made four sets of fault-path measurements wrong by a factor of four. That
+was fixed by relocating the writer — and the relocated writer was still wrong,
+because it counted from a stack floor read out of a previous build, and adding a
+probe grows .text, which moves .stack, which moves the floor. Eight figures were
+corrected one at a time across four cycles with the instrument unexamined.
+
+The general form, which is what applies here: instrumentation is bytes in the
+image, and bytes in the image move every symbol above them. If what you are
+measuring is a distance to a symbol, the instrument is inside the experiment.
+Applied to this task:
 
   A probe that reads DTB_BASE after the kernel has begun writing anywhere near
   it reports the kernel's writes. Read on a HALTED machine, before any Rust has

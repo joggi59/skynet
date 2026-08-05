@@ -180,6 +180,21 @@ const _: () = assert!(
      shutdown would issue a truncated function ID"
 );
 
+/// What the emergency path prints, and the only reason its loop terminates.
+///
+/// It used to be `.asciz` inside the assembly, walked with `ldrb`/`cbz` until a
+/// zero byte turned up — the only loop in the image with no compile-time bound,
+/// terminating on memory a stack overflow destroys. `POLL_BUDGET` bounds the
+/// wait for the FIFO; it never bounded the walk. Corrupt the NUL and the padding
+/// behind it and the path prints memory until something else stops it, raising
+/// no exception on the way.
+///
+/// Defined here instead, so the length is a compile-time constant the loop
+/// counts down and the bytes have exactly one definition. In `.failpath` with
+/// the code that reads it, for the reason everything else in that section is.
+#[unsafe(link_section = ".failpath")]
+static REFAULT_MARKER: [u8; 16] = *b"SKYNET_REFAULT\r\n";
+
 /// The vector table.
 ///
 /// Sixteen entries of 128 bytes, 2 KiB aligned. Both are architectural
@@ -331,7 +346,8 @@ pub(super) unsafe extern "C" fn vector_table() -> ! {
 unsafe extern "C" fn emergency_report() -> ! {
     naked_asm!(
         "  movz x1, #{uart_hi}, lsl #16",
-        "  adr  x3, 30f",
+        "  adr  x3, {marker}",
+        "  movz w7, #{marker_len}",
         // The per-byte budget. A UART that answers and never drains is not
         // bounded by any state machine: no exception is ever taken, so nothing
         // can intervene. Review pointed QEMU virt's PCIe MMIO window at this
@@ -340,23 +356,24 @@ unsafe extern "C" fn emergency_report() -> ! {
         // will not go is dropped, and the marker comes out short rather than
         // never.
         "20: ldrb w4, [x3], #1",
-        "    cbz  w4, 24f",
         "    movz w5, #{poll_lo}",
         "    movk w5, #{poll_hi}, lsl #16",
         "21: ldr  w6, [x1, #{fr_off}]",
         "    tbz  w6, #{txff_bit}, 23f",
         "    subs w5, w5, #1",
         "    b.ne 21b",
-        "    b    20b",
+        // Budget spent on this byte. Drop it and count it — an earlier version
+        // branched back to the load without counting, so a FIFO that stayed full
+        // walked the pointer forever and the length bound bought nothing.
+        "    b    24f",
         "23: str  w4, [x1, #{dr_off}]",
-        "    b    20b",
-
-        "30: .asciz \"SKYNET_REFAULT\\r\\n\"",
-        "    .balign 4",
-
-        "24: b    {quiet}",
+        "24: subs w7, w7, #1",
+        "    b.ne 20b",
+        "    b    {quiet}",
 
         quiet       = sym quiet_stop,
+        marker      = sym REFAULT_MARKER,
+        marker_len  = const REFAULT_MARKER.len(),
         uart_hi     = const (super::platform::UART0_BASE >> 16),
         dr_off      = const super::pl011::BootConsole::DR,
         fr_off      = const super::pl011::BootConsole::FR,

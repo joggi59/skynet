@@ -35,10 +35,9 @@ pub trait Console {
     /// named and left. The difference claimed is that an RFC is a design record
     /// a later contribution can correct, while this is the contract every
     /// implementation is checked against — leaving it false makes every
-    /// conforming implementation non-conforming. One reviewer called touching it
-    /// the invariant-3-correct call; another called it a violation dressed as
-    /// disclosure. Both readings are on the record and this is the disclosure,
-    /// not the resolution.
+    /// conforming implementation non-conforming. Review has read it both ways — as the
+    /// invariant-3-correct call, and as a violation dressed as disclosure. This
+    /// is the disclosure, not the resolution.
     fn write(&mut self, bytes: &[u8]);
 }
 

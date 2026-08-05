@@ -49,20 +49,25 @@ SECTIONS
      *   .stack     0x400814c0   65536 bytes
      *
      * The stack grows down from `__stack_top`, so it destroys `.text` first and
-     * the vector table last. Measured with a writing loop relocated to
-     * 0x44100000, outside everything it destroys — a loop that writes over its
-     * own code reports where it died, not the depth it was asked for, and every
-     * earlier figure in this file was that mistake:
+     * the vector table last. What each depth costs is ARITHMETIC on the section
+     * table above, not a probe reading — every probe here changes the image it
+     * measures, three times over: one destroyed its own writing loop, one
+     * counted from a floor read out of a different build, and one put its own
+     * code in the bytes whose destruction was the thing being measured.
      *
-     *      16 B    2 exceptions   exit 0    full fault report
-     *     800 B    3              exit 0    full fault report
-     *   2,200 B    3              exit 0    SKYNET_REFAULT
-     *   3,072 B    3              exit 0    SKYNET_REFAULT
-     *   3,200 B    4              exit 0    SKYNET_REFAULT
-     *   3,264 B    4              exit 0    silent, but still powers off
-     *   3,280 B    4              exit 124  silent — quiet_stop's hvc is gone
-     *   4,700 B    4              exit 124  silent
-     *   4,800 B    ~3.4 million   exit 124  vector entry 4 destroyed
+     * So the distances are derived, and anyone can re-derive them with objdump:
+     *
+     *        4 B   `bl fault_stop`, the LAST word of .text. Past this depth no
+     *            full fault report is possible; the best remaining is the marker.
+     *     3280 B   `quiet_stop`'s `hvc`. Past this the machine cannot power
+     *            itself off: bounded at four exceptions, silent, exit 124.
+     *     4800 B   vector entry 4. Past this the processor branches into
+     *            rubbish and storms — millions of exceptions, nothing printed.
+     *
+     * Reproduced under QEMU at those depths, and the first row is why two rows
+     * of an earlier table were false in the reassuring direction: they claimed a
+     * full report at 16 and 800 bytes, and a full report has been impossible
+     * past four bytes since `.text` came to end at the stack floor.
      *
      * Three things this table says that the prose it replaced did not.
      *

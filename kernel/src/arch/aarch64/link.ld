@@ -17,15 +17,13 @@
  * exception promptly while destroying a jump-table entry can turn a branch into
  * a loop on itself that raises nothing at all.
  *
- * Every ADJACENT pair in that chain is an ASSERT below, except one: nothing
- * asserts that `.stack` is highest, which is this file's founding premise and is
- * held by script order alone. An orphan section placed above it links, passes
- * all twelve ASSERTs and every check, and inflates the image thirteenfold while
- * the size budget reports 36% used. Carried in tasks/open/T-0008.toml. An earlier version of this sentence claimed the same
- * thing while three pairs were held by script order alone, and a judge moved
- * `.failpath` above `.rodata`: it linked, it booted, it passed every check, and
- * the emergency rungs came 744 bytes closer to the stack. The sentence promising
- * the file was checked was the part that was not.
+ * WHICH of those orderings is enforced is not summarised here. Read the ASSERTs.
+ *
+ * Seven attempts to summarise them have been written and six were false — the
+ * last claimed "every adjacent pair except one" when four of eight pairs were
+ * unasserted, and was written to correct a claim of "all seven pairs" which was
+ * written to correct one before that. A sentence that enumerates can drift from
+ * what it enumerates; a pointer cannot. This is the pointer.
  *
  * ─── WHAT IT BUYS, AND WHERE IT STOPS ───────────────────────────────────────
  *
@@ -137,6 +135,13 @@ SECTIONS
            "the guard is not below the failure path: the ordering these ASSERTs exist to hold has been reversed")
     ASSERT(ADDR(.failpath) < ADDR(.rodata),
            "the failure path is not below .rodata: it moves closer to the stack, which is the one thing this layout exists to prevent")
+    /* The founding premise, which nothing held until it was demonstrated: place
+     * `.stack` between `.guard` and `.failpath` and it grows down through the
+     * guard and the whole vector table, while the build, clippy, all twelve
+     * other ASSERTs, the alignment check, the size budget at 36% and the boot
+     * test with a clean PSCI shutdown are every one of them green. */
+    ASSERT(ADDR(.stack) > ADDR(.text),
+           "the stack is not the highest section: it grows down through the failure path and the vector table, and every other check in this repository stays green while it does")
     ASSERT(SIZEOF(.guard) >= 4,
            "the re-entrancy guard section is empty or too small: nothing is holding the flag")
 

@@ -19,8 +19,9 @@
 
 /// A byte sink reaching the operator's boot console.
 pub trait Console {
-    /// Write bytes in order, returning when the device has taken them — or when
-    /// an implementation has established that it will not.
+    /// Write bytes in order. Returns when the device has taken all of them, or
+    /// when an implementation has given up on it — an implementation may drop
+    /// bytes, and this trait requires only that it return.
     ///
     /// The contract used to promise every byte and a return only once the device
     /// had accepted each one. An implementation cannot honour that: a device
@@ -28,10 +29,16 @@ pub trait Console {
     /// that hangs in its console cannot report why. Callers must not assume all
     /// bytes reached the wire; nothing in this kernel does.
     ///
-    /// This is a portable file, which the task forbids touching. It is touched
-    /// because the sentence became false when the arch implementation gained a
-    /// bound, and a trait's contract that no implementation keeps is worse than
-    /// a changed line.
+    /// This is a portable file the task's `does_not_touch` names. It is touched,
+    /// and the argument for touching it should be read against the argument
+    /// this same contribution makes for NOT touching `rfcs/`: there the debt is
+    /// named and left. The difference claimed is that an RFC is a design record
+    /// a later contribution can correct, while this is the contract every
+    /// implementation is checked against — leaving it false makes every
+    /// conforming implementation non-conforming. One reviewer called touching it
+    /// the invariant-3-correct call; another called it a violation dressed as
+    /// disclosure. Both readings are on the record and this is the disclosure,
+    /// not the resolution.
     fn write(&mut self, bytes: &[u8]);
 }
 

@@ -76,7 +76,18 @@ SECTIONS
      *
      * VBAR_EL1's low 11 bits are RES0: a misaligned table produces no error, no
      * warning and no fault — the processor truncates the address. */
-    .vectors ALIGN(2048) : { KEEP(*(.vectors)) }
+    .vectors ALIGN(2048) : {
+        KEEP(*(.vectors))
+        /* Pad to the full sixteen entries, so the size is an EQUALITY below
+         * rather than a range with slack to argue about.
+         *
+         * A truncated entry 15 becomes zero bytes, and all-zero is a
+         * permanently-undefined AArch64 encoding: the processor traps into the
+         * ladder instead of falling off the end of the table into `.guard`.
+         * Padding turns a silent overrun into the one behaviour this whole file
+         * is built around. */
+        . = ALIGN(2048);
+    }
 
     /* PROGBITS, not NOBITS: one word carried in the image and initialised by the
      * loader, so it is valid before any .bss clear runs. A guard zeroed after
@@ -110,22 +121,27 @@ SECTIONS
 
     ASSERT((ADDR(.vectors) & 2047) == 0,
            "vector table is not 2 KiB aligned: VBAR_EL1's low 11 bits are RES0")
-    ASSERT(SIZEOF(.vectors) > 0x780,
-           "vector table is truncated: fewer than sixteen entries")
+    /* An equality, not a range.
+     *
+     * `> 0x780` admitted a sixteenth entry one byte long, and nothing anywhere
+     * said that entry 15 could run off the end of the table into `.guard`. The
+     * two "derivations" that were supposed to state the remaining slack were the
+     * same expression written twice — `0x800 - S` and `128 - (S - 1920)` both
+     * reduce to `2048 - S` — which is what an unevaluated derivation looks like.
+     *
+     * With the section padded above, the size is architectural: sixteen entries
+     * of 128 bytes, or a link error. Nothing to state, nothing to go stale. */
+    ASSERT(SIZEOF(.vectors) == 0x800,
+           "the vector table is not exactly sixteen entries of 128 bytes")
 
     /* `.align 7` aligns an entry; it does not CAP one. An oversized entry pushes
      * the next to the following boundary and the table becomes sixteen entries
      * at a 256-byte stride, which the processor still indexes by 128 — so every
      * fault names the wrong slot and nothing else changes. It links, it boots,
      * the alignment check passes, the report is simply false. */
-    /* The slack is `0x800 - SIZEOF(.vectors)` for the table and
-     * `128 - (SIZEOF(.vectors) - 15 * 128)` for an entry — both computable from
-     * `objdump -h` and neither written here, because a spare-byte count in a
-     * comment is a number that goes stale while the thing it describes moves.
-     * An earlier revision stated them and they were stale within one commit.
-     * Spending the slack is a decision; say so in the message that spends it. */
     ASSERT(SIZEOF(.vectors) <= 0x800,
            "a vector entry exceeds 128 bytes: the table's stride has doubled and every fault will name the wrong slot")
+
 
     /* The ordering, as link errors. Reverting any of these passes build, clippy,
      * every boot-test assertion and every constitution check. */

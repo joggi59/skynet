@@ -150,6 +150,12 @@ SECTIONS
      * guard and the whole vector table, while the build, clippy, all twelve
      * other ASSERTs, the alignment check, the size budget at 36% and the boot
      * test with a clean PSCI shutdown are every one of them green. */
+    /* `.text` below everything the failure path does NOT need. Moving it under
+     * `.bss` links, passes every other ASSERT and every check, and drops the
+     * distance from the stack floor to `bl fault_stop` from 84 bytes to 12 —
+     * the report dies four times sooner with nothing to say so. */
+    ASSERT(ADDR(.text) < ADDR(.got),
+           "code is above data the failure path does not need: the distance from the stack to the last instruction of .text collapses, and no other check sees it")
     ASSERT(ADDR(.stack) > ADDR(.text),
            "the stack is not the highest section: it grows down through the failure path and the vector table, and every other check in this repository stays green while it does")
     ASSERT(SIZEOF(.guard) >= 4,

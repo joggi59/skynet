@@ -90,6 +90,12 @@ cond_deps()   { heading "7. Dependencies";_absorb ci/constitution-check.sh --che
 cond_authority() { heading "6b. Authority minting";  _absorb ci/constitution-check.sh --check minting-sites; }
 cond_ledger()    { heading "10b. Ledger append-only"; _absorb ci/constitution-check.sh --check provenance; }
 cond_kprov()     { heading "10c. Kernel provenance";  _absorb ci/constitution-check.sh --check kernel-provenance; }
+# A check nothing in the merge path runs is a check a judge has to be the
+# enforcement for. panel-leak was written, widened three times, and never wired
+# here — so the only thing between an attribution and main was a Guardian
+# noticing. One did, on a commit message written one minute after this branch
+# merged the check itself.
+cond_leak()      { heading "8b. Panel independence"; _absorb ci/constitution-check.sh --check panel-leak; }
 
 # Run a sub-check in the contribution's worktree, echo its per-check lines, and
 # fold its tallies into ours. The sub-scripts already speak PASS/FAIL/PENDING;
@@ -494,7 +500,7 @@ run_all() {
 
     cond_build; cond_lint; cond_tests; cond_boot
     cond_budgets; cond_hal; cond_deps; cond_authority
-    cond_reviewers; cond_guardian; cond_provenance; cond_ledger; cond_kprov
+    cond_reviewers; cond_leak; cond_guardian; cond_provenance; cond_ledger; cond_kprov
 
     echo
     if [ "$CHECKS_FAIL" -gt 0 ]; then
@@ -529,6 +535,7 @@ main() {
                         boot) cond_boot ;; budgets) cond_budgets ;; hal) cond_hal ;;
                         deps) cond_deps ;; authority) cond_authority ;;
                         ledger) cond_ledger ;; kernel-provenance) cond_kprov ;;
+                        panel-leak) cond_leak ;;
                         reviewers) cond_reviewers ;;
                         guardian) cond_guardian ;; provenance) cond_provenance ;;
                         *) die "unknown condition '$2' (try --list)" ;;

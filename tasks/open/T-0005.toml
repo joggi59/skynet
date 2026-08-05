@@ -92,6 +92,20 @@ answer, it does need the MMU, and it is not asked for here.
 #
 # Two criteria are worded differently from their T-0004 ancestors because review
 # found the ancestors unsatisfiable as written — see [task.notes].
+#
+# Group B's middle criterion has since been replaced, for the same reason and
+# after this task was claimed: as written it was vacuous, and read over the whole
+# of the guard's value space it demanded a property the ladder is built to break.
+# Three criteria stand where it did. See [task.notes].
+#
+# WHAT 'Today:' MEANS IN THIS FILE, stated because it was not and a careful reader
+# took it the other way. Every 'Today:' and 'Measured today' clause describes MAIN
+# as it stood when this task was written — the baseline a demand is measured
+# against, never the state of a branch. Each criterion reads: here is what main
+# does, and here is what must be true instead. A branch that has already fixed
+# something does not make its baseline clause false; it makes it the before half
+# of a before-and-after. Every such clause was re-verified against main after the
+# task was claimed — see [task.notes] for what was checked and what could not be.
 criteria = [
     # --- Standing checks -----------------------------------------------------
     "ci/build.sh exits 0",
@@ -109,12 +123,14 @@ criteria = [
     "OPEN: RFC-0002 O-9 says 'Without an MMU there is no guard page and no way to make the stack's overflow land somewhere harmless', and that a corrupted guard byte 'turns the first genuine fault into a machine that stops and says why'. Review measured both false. Amending the RFC belongs to the architect and NOT to this task or its implementer. Nothing here requires a guard page, and no criterion above names a layout — if the architect concludes the placement remedy is wrong, release group A rather than argue it inside a patch",
 
     # --- B. One guard byte value silences the first fault --------------------
-    "PROOF: with IN_FAILURE pre-set to 0x5a before any fault is taken, the first genuine fault must not vanish. Measured today: exactly 1 exception, no console output at all, no PSCI, exit 124 — the entry's cmp against STOPPING sends it to the dead wfi at label 25. Under 0xa5 the same corruption prints SKYNET_REFAULT and powers off, exit 0. Show the 0x5a case producing output and stopping by itself",
-    "PROOF: sweep the byte. Pre-set IN_FAILURE to each of the 256 possible values, take one genuine fault, and show that no value produces both an empty console and exit 124. Report the count of values that reach the timeout at all, and name them. This is 256 boots and it converts 'one stray value in 256' from an argument into a measurement",
+    "PROOF: a named regression check on the two values that were actually measured, and on the MECHANISM that closes them. Baseline, on main: IN_FAILURE is an AtomicU8, STOPPING is 0x5a, and the entry's first test is cmp w1,#{stopping} / b.eq 25f into the dead wfi at label 25 — so pre-setting the guard to exactly 0x5a costs the FIRST genuine fault its report: 1 exception, no console output at all, no PSCI, exit 124. Pre-set to 0xa5 the same corruption prints SKYNET_REFAULT and powers off, exit 0. Show both values now producing a full report and stopping by themselves, AND show that they do so because no byte-wide value can select a rung any more — not because either value is special-cased. A cmp added to the entry that excludes 0x5a would satisfy the demand and leave the defect, one value further along; the widening is the fix and this criterion is where that distinction is checked. It adds no coverage beyond the criterion below, which samples the same class with representatives chosen for a reason — it is kept because the defect group B is named for was measured at these two values, and a fix should be answerable at the point of the measurement",
+    "PROOF: the guard's value space exhaustively, which is five boots and not 256. The vector entry decides with ONE load of the 32-bit word and three equality compares against immediates the linker folds in — read them out of the disassembly, not out of fail.rs — and it examines no other property of the word. So 2^32 values have exactly four behavioural classes and one representative of each is exhaustive. Boot with IN_FAILURE pre-set to SILENT, to STOPPING, to FAILING, and twice in the fourth class: once to 0, the value the guard links with, and once to a ladder constant with a single byte changed. Show the disassembly and the five consoles. The near-miss is the audit of the structural claim, not a spare boot: if it lands anywhere but the full report, the compare is not an equality and the partition is wider than four",
+    "PROOF: the empty console and the absent exit belong to rung four and to nothing else. Pre-set to SILENT the machine gives an empty console and never exits, because rung four is two instructions that touch no device; pre-set to STOPPING it gives an empty console and exit 0, because quiet_stop issues PSCI and writes nothing. Neither is a defect and this criterion does not ask for their absence — a terminal rung that touches nothing cannot both exist and print, and one that issued PSCI would meet its own fault in the same state and issue it again forever, which is the reason the fourth rung exists at all. What must be shown is that nothing REACHES that silence except the ladder: from the guard as linked, a genuine fault gives SKYNET_FAULT and exit 0, and the silence appears only after the report path AND the marker path have both faulted. Show the descent — one genuine fault, then a fault injected into the report, then one into the marker path, then one into quiet_stop's hvc — with the console and the guard's value at each of the four steps",
+    "the three ladder constants and the zero the guard links with differ pairwise in EVERY byte — all six pairs — so no store narrower than the full word can move the machine from one rung to another, or into any rung from the value it boots with. Check the six pairs against the immediates in the disassembly rather than against fail.rs: 0, FAILING 0xa5a55a5a, STOPPING 0x5a5aa5a5, SILENT 0x3c3cc3c3. This is the property the widening from a byte to a word bought, it is decidable from four constants without booting anything, and it is what the superseded sweep was reaching for — a byte-sized guard had one value in 256 that silenced the first genuine fault, and the answer to that is an encoding no narrow accident can reach, not a count of boots that survived",
     "REVIEW: STOPPING's doc comment carries the .bss-corruption hazard that FAILING's comment directly above it treats as central, or the hazard is gone. Today the two ends of the guard disagree under the same corruption and only one of them says so",
 
     # --- C. fail_stop can still demote the state -----------------------------
-    "the disassembly of fail_stop shows no store to the guard before the compare that reads it. Today: ldrb w9,[x8,#760] / strb w10,[x8,#760] / cmp w9,#0xa5 — load, unconditional store, then the test. The vector entry already writes only on the path that continues; this is the same shape in the sibling function",
+    "the disassembly of fail_stop shows no store to the guard before the compare that reads it. Today, in main's source at fail.rs:209-210, the order is a load into 'already', then an UNCONDITIONAL store of FAILING, then the test — which is the defect, and it is visible without disassembling anything. It was measured as ldrb w9,[x8,#760] / strb w10,[x8,#760] / cmp w9,#0xa5; keep those figures as the measurement they are, but the register numbers and the #760 offset are products of one build's register allocation and one link, so do not expect them to reproduce and do not read a different triple as a different defect. What must change is the ORDER. The vector entry already writes only on the path that continues; this is the same shape in the sibling function",
     "REVIEW: whatever keeps STOPPING from being demoted is stated where it is relied on, not left as a property of the current shape of sixteen lines of assembly. Today the safety rests on 'no Rust executes while STOPPING is set' and no file says so, so the first richer epitaph, per-core hook or watchdog kick on that path re-arms the oscillation and leaves no trace",
 
     # --- D. A poll that never returns ----------------------------------------
@@ -234,10 +250,17 @@ TRAPS.
   check reports SKIP with exit 0 on an image whose table is in the wrong place.
   The two link-time ASSERTs are what actually hold; keep them and keep the name.
 
-  Pre-setting IN_FAILURE for the 256-value sweep is not as simple as writing to
-  the static: boot.rs zeroes .bss between __bss_start and __bss_end before Rust
-  runs, so anything set earlier is erased. Set it after the zeroing and before
-  the fault, and say in the submission where you set it.
+  Pre-setting IN_FAILURE is not as simple as writing to the static, and the
+  reason depends on where the guard ends up. While it lived in .bss, boot.rs
+  zeroed it: the assembly clears __bss_start to __bss_end before Rust runs, so
+  anything set earlier was erased and the preset had to be written after the
+  clear and before the fault. A guard moved OUT of .bss — into a section of its
+  own below .text, which is what the layout in group A wants anyway — is outside
+  that range and survives from the image, so the preset can be a link-time
+  initialiser and needs no code on the boot path at all. Either is fine. Say
+  which one you used and where, because a preset the boot path erases is
+  indistinguishable in the console from a rung that was never selected, and that
+  is precisely the confusion that made the superseded sweep look like a pass.
 
   overflow-checks = true is on in release. A retry counter that can wrap takes
   the panic path from inside the fault path, which is the case criterion 'a panic
@@ -263,6 +286,158 @@ TWO CRITERIA WERE REWORDED, AND WHY.
     'show the link failing on a UART base the emergency path's movz cannot form'
     names the wrong mechanism: that one is a rustc const-assert, E0080, not a
     link error. It is not re-asked here.
+
+AND B2 WAS REPLACED, AFTER THIS TASK WAS CLAIMED.
+
+  The three criteria now standing in group B's middle position are not what this
+  file was submitted with. The original asked for a 256-value sweep of IN_FAILURE
+  and for proof that no value produced both an empty console and exit 124. Both
+  halves are wrong, and they are wrong in different ways.
+
+    IN_FAILURE was a byte when that criterion was written and is a 32-bit word
+    now. The widening is part of the work this task asked for and is the right
+    answer to the defect group B names — but it makes the criterion's instrument
+    inert. Every one of the three ladder constants has four non-zero bytes, so no
+    value in 0x00..0xff can equal any of them, and a sweep of 256 low-byte values
+    selects the same rung 256 times and returns zero timeouts by construction.
+    Measured both ways the sentence can be read: 512 boots, zero from each,
+    proving nothing about the guard. A criterion that cannot fail is not a check,
+    and this one reported a pass that read as reassurance.
+
+    Over the guard's real domain the demand is not merely vacuous, it is false —
+    and it should be. Preset to SILENT the machine gives an empty console and
+    exit 124, because rung four is a wfi loop that touches no device and issues
+    no PSCI. Preset to STOPPING it gives an empty console and exit 0. The first
+    of those is the terminal rung doing exactly what it exists to do, and it must
+    not issue PSCI: a fault in that hvc would return to the same state and issue
+    it again forever, which is the argument the fourth rung was added on. So a
+    criterion demanding the absence of an empty console with no exit is demanding
+    that the ladder have no bottom. It would be satisfiable only by breaking the
+    thing it was written to protect.
+
+  What replaces it asks for three things the old wording was groping at and could
+  not reach: the partition (four behavioural classes, five boots, and the
+  disassembly that makes four of them exhaustive), the silence being reachable
+  only through the ladder rather than by a stray word, and the pairwise byte
+  separation that the widening actually bought. All three are decidable, one of
+  them without booting anything, and the measurement the other two need already
+  exists in the branch.
+
+  Timing, stated rather than left to be discovered. This amendment postdates the
+  contribution submitted from task/T-0005, which was recorded against this
+  file's earlier content, and it is not written to be applied backwards to it.
+  The copy the branch reads is tasks/active/T-0005.toml and is not writable from
+  the role that writes acceptance criteria, so the two texts differ until
+  something with authority over both reconciles them. Two versions of one
+  acceptance criterion in one tree is the condition under which the wrong one
+  gets cited, and the cheapest defence against it is a paragraph saying so.
+
+AND B1 WAS REWRITTEN, THOUGH NOT FOR THE REASON IT WAS QUESTIONED.
+
+  B1 was put to me as carrying B2's defect one layer down: its 'Measured today'
+  clause was said to have been made false by the widening, since neither 0x5a nor
+  0xa5 can select a rung in a 32-bit guard. I checked main before amending, and
+  the premise does not hold. Main is where 'Today' points, and main still has
+  AtomicU8, FAILING 0xa5, STOPPING 0x5a, cmp w1,#{stopping} / b.eq 25f and the
+  dead wfi at label 25. The clause is an accurate description of the baseline and
+  the widening is the fix it was asking for. Recorded because a premise accepted
+  is a premise nobody checked, and this file exists because of four of those.
+
+  What WAS wrong is the demand. 'Show the 0x5a case producing output and stopping
+  by itself' is satisfied on the branch by 0x5a being one arbitrary member of the
+  fourth class, which the criterion below already samples twice with
+  representatives chosen for a reason. So the demand asked for less than the
+  criterion after it while looking like a second, independent check.
+
+  It is now a named regression check with the one demand nothing else in group B
+  makes: that both measured values produce a report BECAUSE no byte-wide value can
+  select a rung, and not because either is special-cased. That distinction is the
+  whole difference between fixing the defect and moving it one value along, no
+  other criterion here would catch the cheap version, and B1 now states plainly
+  that it adds no coverage otherwise — a criterion that hides its own redundancy is
+  how two checks come to look like corroboration.
+
+EVERY BASELINE CLAUSE WAS RE-VERIFIED AGAINST MAIN. WHAT HELD, AND WHAT DID NOT.
+
+  Prompted by a reading of B1 as a claim about the branch rather than about main.
+  It is a claim about main and it is true, but if that misreading is available to
+  a careful reader it is available to a judge, so every quoted line number, code
+  span and instruction sequence in this file was checked against main rather than
+  argued about. Verified verbatim, at the line stated:
+
+    fail.rs:33, :131, :277        the three unnamed collective attributions
+    fail.rs:46                    'All sixteen vector entries read it and write
+                                  it, on' — the clause starts on that line
+    fail.rs:126-128 and :154      the restatement, verbatim as described
+    fail.rs:166 and :195          'load and store, not swap', twice
+    fail.rs:135 / :280            192 bits and 160 bits, the two counts
+    fail.rs:268-270               'register values — facts about the machine'
+    fail.rs:287-290 / :293-294    'NO guard check here', then the 'guard above'
+                                  claim three lines past the end of that comment
+    exception.rs:210-211, :213    'make room for x0-x30 …' and '256 bytes of
+                                  stack'
+    exception.rs:275-276          the emergency poll. The criterion quotes it
+                                  resolved — ldr w3,[x1,#0x18] / tbnz w3,#5,22b —
+                                  and pl011.rs confirms FR = 0x018 and
+                                  FR_TXFF = 1 << 5, so the resolution is right
+    pl011.rs:77                   the unbounded while, verbatim
+    boot.rs:62, link.ld:48        two of the four named attributions
+    link.ld:55 and :69            SIZEOF(.vectors) > 0x780 and <= 0x800
+    fail.rs:5, :54, :64, :77      AtomicU8, and FAILING 0xa5 / STOPPING 0x5a —
+                                  the byte guard B1 is a regression check on
+    exception.rs:251-252, :292    cmp w1,#{stopping} / b.eq 25f, and 25: wfi
+
+  Not re-measured, and now labelled in place rather than left to look like facts
+  of the tree: fail_stop's ldrb/strb/cmp triple with its w9/w10/x8 registers and
+  #760 offset, and the nano image at 4,836 bytes. Both need a build, both are
+  products of one register allocation and one link, and building main from this
+  role would write into kernel/ — outside its grant — and leave an artefact on a
+  tree a boot-test does not rebuild, which this file already records as a defect
+  that cost a false FAIL. B1 keeps its numbers with their status stated; C1 keeps
+  its number because the criterion pairs it with a budget and a named failure
+  mode, which is what makes a number checkable.
+
+  The exception counts in A1, A2 and D1 are left as written and are the weakest
+  figures in the file for a reason stated in T-0008: a count of exceptions varies
+  with the trace cap used to observe it, tens of thousands capped against over a
+  million untrapped. They are cited as evidence that a storm happened, which they
+  support, and not as quantities anything must reproduce. Every demand attached to
+  them is a signature — a console that is not empty, a machine that stopped by
+  itself — and that is the right instrument.
+
+ONE OTHER CRITERION HAS THE SAME SHAPE, AND IT IS LEFT STANDING.
+
+  A2 asks for a number: 'state the new boundary in bytes — the overrun depth at
+  which the machine stops stopping'. It is satisfiable, because of the clause
+  permitting a submission to report that no boundary was found and how far it
+  went, and that clause is the only thing keeping it from being B2 again. The
+  defect it shares with B2 is the shape: a single number is asked of a harness
+  the criterion never asks anyone to audit, over a 64 KiB domain sampled at three
+  points, and the number arrives looking like a boundary when it is a sample.
+
+  That is not hypothetical. The depth-injection harness this criterion drives has
+  been wrong twice, for two unrelated reasons — a writer destroyed by its own
+  writes reported the address where it died rather than the depth it was asked
+  for, and its replacement counted from a stack floor read out of a previous
+  build while the probe it added moved that floor. Eight figures were corrected
+  one at a time across four cycles and the instrument itself stayed unexamined.
+  T-0008 already carries that as a BLOCKED criterion, which is where the fix
+  belongs; rewording A2 on a task already claimed would change what a submitted
+  contribution is measured against for a criterion that, unlike B2, can at least
+  be answered honestly as written.
+
+  The general form, recorded once so it is not rediscovered one cycle at a time. A
+  criterion that demands a count gets a count, and a count carries none of the
+  three things that would let a reader check it: the domain it was taken over,
+  the instrument that produced it, and the identity it should satisfy. None of
+  the three is recoverable from the number afterwards. Every well-formed number
+  in this file has at least one of them attached — the nano image size has a
+  budget and a named failure mode, minting-sites has a stated blindness and a
+  REVIEW standing behind it, the 160-bit reach-around is derived three ways and
+  cross-checked against the RFC. B2 had none of them, and that is why it could
+  return zero and mean nothing. Where a count is the natural answer, state the
+  domain, name the instrument, and give the arithmetic the count must satisfy;
+  where it is not, ask for the signature instead.
 
 WHAT I LEFT OUT OF THIS TASK, AND WHO OWNS IT.
 

@@ -77,7 +77,9 @@ SECTIONS
      * VBAR_EL1's low 11 bits are RES0: a misaligned table produces no error, no
      * warning and no fault — the processor truncates the address. */
     .vectors ALIGN(2048) : {
+        __vectors_entries = .;
         KEEP(*(.vectors))
+        __vectors_entries_end = .;
         /* Pad to the full sixteen entries, so the size is an EQUALITY below
          * rather than a range with slack to argue about.
          *
@@ -87,7 +89,7 @@ SECTIONS
          * Padding turns a silent overrun into the one behaviour this whole file
          * is built around. */
         . = ALIGN(2048);
-    }
+    } =0x00000000
 
     /* PROGBITS, not NOBITS: one word carried in the image and initialised by the
      * loader, so it is valid before any .bss clear runs. A guard zeroed after
@@ -131,8 +133,27 @@ SECTIONS
      *
      * With the section padded above, the size is architectural: sixteen entries
      * of 128 bytes, or a link error. Nothing to state, nothing to go stale. */
+    /* TWO assertions, because either alone is defeated by the other's fix.
+     *
+     * `== 0x800` alone is vacuous on the truncation side: the padding brings any
+     * table to 2 KiB, so ONE entry of sixteen links clean, passes every check,
+     * and then storms — measured at 691,392 undefined-instruction exceptions
+     * with a silent console, because the trap target is itself padding. The
+     * `> 0x780` it replaced refused that identical build.
+     *
+     * So the ENTRIES are measured before the padding, and the SECTION after it.
+     * The first says sixteen real entries exist; the second says the table
+     * occupies its full 2 KiB so a short entry 15 cannot spill into `.guard`.
+     *
+     * `=0x00000000` pins the fill. An all-zero word is a permanently-undefined
+     * AArch64 encoding — verified on cortex-a72: ESR 0x02000000, slot
+     * cur_spx_sync, full report, clean PSCI stop — so landing in the pad traps
+     * into the ladder. Without the explicit fill that behaviour is an lld
+     * default, which is not a guarantee. */
+    ASSERT(__vectors_entries_end - __vectors_entries > 0x780,
+           "the vector table has fewer than sixteen real entries: padding would make its SIZEOF look right while the processor branches into fill")
     ASSERT(SIZEOF(.vectors) == 0x800,
-           "the vector table is not exactly sixteen entries of 128 bytes")
+           "the vector table does not occupy its full 2 KiB: a short final entry can spill into the guard")
 
     /* `.align 7` aligns an entry; it does not CAP one. An oversized entry pushes
      * the next to the following boundary and the table becomes sixteen entries

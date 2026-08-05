@@ -1,8 +1,38 @@
 # RFC-0003: What memory exists, and who has it
 
-- Objective: 0002 (memory, and the ground isolation stands on)  Status: draft
+- Objective: 0002 (memory, and the ground isolation stands on)  Status: draft, amended
 - Author: architect                        Model: claude-opus-5[1m]
 - Milestone: M1, second and third parts
+- Amended: 2026-08-05, by the architect, after the premise in §1 was measured and failed
+
+## Amendment: the kernel cannot reach a device tree, and this design assumed it could
+
+**Read this before anything below it.** The first half of this RFC parses a device tree that, for the
+artefact this project currently builds, is not in memory at all. That is not a defect in the parser
+design; it is a false premise underneath it, recorded as open question O-1 with the note that the
+architect had no QEMU and could not check. The check has been made. The answer is the bad one, and
+three things this document asserted are false:
+
+| This RFC said | Measured |
+| --- | --- |
+| QEMU places a device tree at `0x4000_0000` for an ELF linked above `loader_start` | **Nothing is placed.** All zeros at `0x4000_0000` at `-m 128M`, `64M` and `8M`, on a halted machine; no `0xd00d_feed` anywhere in RAM; every GPR zero at entry |
+| `-dtb <file>` would supply one — "cheap", per O-1 | **It does not.** With `-kernel <elf> -dtb <blob>`, a scan of all 128 MiB of guest RAM finds no aligned `0xd00d_feed`. QEMU materialises the blob only inside its `is_linux` path, and an ELF is not `is_linux` |
+| `DTB_MAX_LEN = 0x0008_0000` bounds the blob — the gap between `0x4000_0000` and `KERNEL_BASE` | **The blob is `0x10_0000` bytes**, twice that gap, at every RAM size from 4 MiB to 16 GiB. Even had it been placed at `0x4000_0000`, this design would have rejected it as too large — and QEMU refuses the placement outright, because a 1 MiB blob at `0x4000_0000` overlaps a kernel at `0x4008_0000` |
+
+The route chosen is **boot as a Linux-format `Image`**, and it was run rather than reasoned about:
+§1 is rewritten around it and §1a records the nine measurements, with the machine, the QEMU build and
+the artefact's hash. The kernel is then *told* where the blob is, in `x0`, which is what the aarch64
+boot protocol has always promised and what `ci/boot-test.sh --contract` claimed before RFC-0001
+corrected it. RFC-0001's correction was right — for an ELF, `x0` is zero — and it settled the wrong
+variable: it fixed the contract to match the artefact, where the artefact was the thing that could
+change. This amendment changes the artefact and restores the sentence.
+
+**Every route touches the boot contract, and the boot contract is in `ci/`, which this role may not
+write.** §8 states that obligation as a list, with the role that owns it. It is the one part of this
+amendment that cannot be discharged by the person implementing it.
+
+What survives unchanged: §2's parser (its format constants are now checked against a real blob and
+were correct), §4's allocator, §6's crate split, and the whole of the Non-goals list.
 
 ## Motivation
 
@@ -48,61 +78,201 @@ What the contract does **not** say is that a device tree exists at all, or where
 virt specifics the kernel may rely on" is RAM base, PL011 base, entry state and PSCI conduit; a
 device tree is not on it. So the first question this design has to answer is not how to parse a
 device tree. It is how to find one, given that the only thing the kernel may rely on says nothing
-about it. §1 answers that fail-closed, and O-1 records what stays unsound and who can fix it.
+about it.
+
+The first revision of this RFC answered that with an address read out of QEMU's source and never
+run. It was wrong twice over — the address is not where the blob goes, and for an ELF there is no
+blob to go anywhere. The answer now is that **the kernel does not find the device tree; it is handed
+one**, in `x0`, because the artefact changes to the format that makes QEMU hand it over. That moves
+the fragile part out of the kernel and into the boot contract, where it is a promise somebody can
+check rather than a constant somebody guessed. §1 is that design; §1a is the measurement; §8 is what
+`ci/` must do to make the promise true.
 
 ## Design
 
 ### 0. What is established, and what is not
 
+Every row marked **measured (amendment)** was run on QEMU 10.2.2 (`qemu-10.2.2-1.fc44`), rustc
+1.97.1, `-M virt -cpu cortex-a72`, on 2026-08-05. §1a gives the commands.
+
 | Fact | Status |
 | --- | --- |
-| `x0` is zero at entry; it is not a DTB pointer for an ELF image | Verified in RFC-0001 against `hw/arm/boot.c` |
-| QEMU builds a device tree and loads it at `info->dtb_start` — `0x4000_0000` for an image linked above `loader_start`, limit `0x4008_0000` | Read from QEMU's source in RFC-0001. **Not verified by this RFC**: the machine this was written on has no `qemu-system-aarch64` and no `dtc` installed, so nothing here was run against a real blob |
+| `x0` is zero at entry for an **ELF** image; it is not a DTB pointer | Verified in RFC-0001 against `hw/arm/boot.c`; **re-measured (amendment)** on this tree's own binary: `X0=0x0000000000000000` |
+| ~~QEMU loads a device tree at `0x4000_0000` for an ELF~~ | **FALSE — measured (amendment).** Nothing is placed anywhere in RAM for an ELF, with or without `-dtb`. The row this replaces was read from QEMU's source and never run |
+| For a **Linux-format `Image`**, QEMU writes a bootloader stub at `0x4000_0000`, loads the image at `mem_base + text_offset`, places the blob, and enters the kernel with `x0` = blob address, `x1`–`x3` = 0 | **Measured (amendment)**, at `-m 4M/8M/16M/32M/64M/128M`. Load address is `0x4008_0000` at every size, i.e. `KERNEL_BASE` is unchanged |
+| The blob's address is **not fixed**: `ram_base + min(ram_size/2, 128 MiB)`, rounded up to 2 MiB | **Measured (amendment)** — see §1a's table. This is why no address constant can be right |
+| The blob is `totalsize = 0x10_0000` (1 MiB), `version = 17`, `last_comp_version = 16`, of which `size_dt_struct = 0x1b88` (≈ 7 KiB) is content | **Measured (amendment)**, identical at every RAM size from 4 MiB to 16 GiB |
+| QEMU virt reports **one** `/memory` node, root `#address-cells` = 2, `#size-cells` = 2, and an **empty** memory-reservation block | **Measured (amendment)** at 8 MiB, 128 MiB, 4 GiB, 8 GiB and 16 GiB. `size` tracks `-m` exactly |
 | The gate boots with `-M virt -cpu cortex-a72 -m 128M` | `ci/boot-test.sh`, `ci/lib.sh` |
 | `cargo::rustc-link-arg=` applies to test targets as well as binaries | **Measured** for this RFC — see §6 |
 | `[lib]` plus `[[bin]] test = false` lets `cargo test` run on the host with a `no_std`, `no_main` binary in the same package | **Measured** for this RFC — see §6 |
-| The FDT header, token and reservation-block layout in §2 | Stated from the Devicetree Specification. Not verified against a blob here; the implementer must check each field, and a reviewer should treat a mismatch as a defect in this RFC |
+| The FDT header, token and reservation-block layout in §2 | Stated from the Devicetree Specification, and **now checked against the real blob (amendment)**: an independent reader built from §2's description parsed QEMU's blob to `FDT_END` with no unknown token, found `off_dt_struct` 4-byte aligned and `off_mem_rsvmap` 8-byte aligned, and read back the memory size `-m` was given. §2's constants are correct |
 
-### 1. Finding the device tree
+### 1. Being handed the device tree
 
-`platform.rs` gains two board facts, and they are the only new constants:
+**The artefact becomes a Linux-format `Image`, and the blob arrives in `x0`.** There is no
+`DTB_BASE`. There cannot be one: the address moves with the machine's RAM size, and a kernel that
+hardcoded any of the six values §1a measured would be right on one machine and building a memory map
+out of whatever it found on the other five.
 
-```rust
-/// Where QEMU virt places the device tree it builds for an ELF image: the base
-/// of RAM, with the kernel linked 512 KiB above it.
-pub const DTB_BASE: usize = 0x4000_0000;
-/// The space between DTB_BASE and the kernel's link address. A blob claiming to
-/// be larger than this is rejected rather than parsed.
-pub const DTB_MAX_LEN: usize = 0x0008_0000;
+`_start` gains the aarch64 boot protocol's 64-byte image header **as its own first 64 bytes**, the
+way Linux's `head.S` does — `code0` is a branch over the header, so `_start` remains both the entry
+symbol and the header, and `nm` still places it at `KERNEL_BASE`:
+
+```text
+  b    9f                 // code0: branch past the header
+  .word 0                 // code1
+  .quad 0x80000           // text_offset — matches KERNEL_BASE - RAM base
+  .quad __image_size      // image_size: non-zero, or the loader ignores text_offset
+  .quad 0                 // flags: little-endian, 4 KiB pages
+  .quad 0, 0, 0           // res2, res3, res4
+  .ascii "ARM\x64"        // magic
+  .word 0                 // res5 (PE/COFF offset)
+9:
 ```
 
-The boot path reads the 40-byte header at `DTB_BASE`, validates it, and only then constructs a
-`&'static [u8]` of exactly `totalsize` bytes. Every later access is a safe slice index.
+`link.ld` gains one line, `__image_size = __kernel_end - KERNEL_BASE`, which is the memory footprint
+including `.bss` and the stack — the quantity the protocol asks for, not the file length. It also has
+one comment to correct: `KERNEL_BASE`'s says the 512 KiB offset "leaves the low region for the device
+tree QEMU builds", which was never true and is now measurably not true. Both are small, and both land
+in a file **T-0005 is currently rewriting** — whoever decomposes this must sequence against that
+branch rather than let two contributions edit the linker script in parallel.
 
-**One candidate address, validated. No search.** Scanning a range for `0xd00d_feed` finds the magic
-in a random four bytes of uninitialised RAM and turns garbage into a memory map, and the map is the
-thing the whole milestone rests on. One address, checked hard, is the only shape that fails closed.
+`_start` already touches only `x9`–`x12` and ends in a tail branch, so `x0` reaches Rust untouched.
+`boot_rust` changes signature to `boot_rust(dtb: u64)`. That is the whole architectural change.
 
-**No fallback to constants.** If the header does not validate, the kernel does not invent a memory
-map; it says so and stops, before the boot marker, so the gate fails with a legible reason rather
-than booting on a fiction. The objective's criterion 2 says "from the device tree rather than from
-constants", and a fallback is exactly the code path that makes a build pass CI while ignoring the
-device tree.
+**The only new constant is a sanity bound, and it is portable.** It goes in `fdt.rs`, not
+`platform.rs`, because it is a statement about how much input this parser is willing to read, not a
+fact about a board:
+
+```rust
+/// The largest blob this kernel will read. QEMU virt's is exactly 1 MiB at every
+/// RAM size measured; this is twice that. A `totalsize` above it is rejected
+/// rather than parsed — not because a larger tree is illegitimate, but because
+/// the kernel has no way to bound the blob against RAM it has not discovered yet.
+pub const MAX_BLOB_LEN: u64 = 0x0020_0000;
+```
+
+The old `DTB_MAX_LEN = 0x0008_0000` is deleted. Its derivation — "the space between `DTB_BASE` and
+the kernel's link address" — described a placement that does not happen, and its value was half the
+size of the blob it was meant to admit.
+
+**Nothing is searched for.** The earlier draft argued against scanning for `0xd00d_feed`, and the
+argument stands and is now stronger: §1a measured a scan of all 128 MiB finding nothing at all for
+an ELF, which is the *lucky* outcome. The unlucky one is finding the magic in four bytes of
+uninitialised RAM and building the milestone's foundation on it.
+
+**Nothing falls back to a constant.** `x0 == 0` means the kernel was booted the old way — as an ELF,
+which still works and which §1a confirms still produces `x0 = 0` from the very same binary. That is
+a legible failure, not a licence to guess: the kernel reports and stops. The objective's criterion 2
+says "from the device tree rather than from constants", and a fallback is the code path that lets a
+build pass CI while ignoring the device tree entirely.
 
 Validation, all of it, before a single byte of the structure block is read:
 
+- `dtb != 0` — reported as its own reason, because it means "booted as an ELF", which is a
+  configuration mistake in `ci/` and not a corrupt blob, and the two should not look alike
+- `dtb` is 8-byte aligned — the protocol requires it, and an unaligned blob would fault on the first
+  `u64` of the reservation block under `+strict-align` with the MMU off
 - `magic == 0xd00d_feed`
-- `totalsize >= 40` and `totalsize <= DTB_MAX_LEN`
+- `totalsize >= 40` and `totalsize <= MAX_BLOB_LEN`
 - `version >= 17` and `last_comp_version <= 17` — the parser reads `size_dt_struct`, which is a v17
-  field, and a blob it cannot read is rejected rather than guessed at
+  field, and a blob it cannot read is rejected rather than guessed at. Measured: QEMU emits
+  `version = 17`, `last_comp_version = 16`, so both hold with no margin on the first and one on the
+  second
 - `off_dt_struct + size_dt_struct <= totalsize`, `off_dt_strings + size_dt_strings <= totalsize`,
   `off_mem_rsvmap <= totalsize`
 - `off_dt_struct` is 4-byte aligned; `off_mem_rsvmap` is 8-byte aligned
+- `dtb + totalsize` does not wrap
 
 Every one of those additions uses checked arithmetic. This is not style: `overflow-checks = true` is
 on in release, so an overflow on a malformed header is a panic, and a panic prints `SKYNET_PANIC`
 and says nothing about what was wrong with the blob. Malformed input must produce a typed error, not
 the marker that means "the kernel has a bug".
+
+**What the kernel cannot check, and what happens instead.** It cannot verify that
+`[dtb, dtb + totalsize)` lies inside RAM, because knowing where RAM is, is what the blob is for. With
+the MMU off that is not a silent hazard: §1a measured a read one word past the RAM top raising a
+synchronous external abort — `ESR_EL1 = 0x9600_0010`, `FAR_EL1` naming the address — which the
+existing vector table reports as `SKYNET_FAULT` and shuts down cleanly, exit 0. A garbage `x0`
+therefore produces a legible fault rather than a hang or a fabricated map. It is worth saying plainly
+that this is the fault path RFC-0002 built doing exactly the job it was built for.
+
+The boot path then constructs a `&'static [u8]` of exactly `totalsize` bytes. Every later access is a
+safe slice index.
+
+### 1a. The measurement
+
+Run on 2026-08-05, QEMU 10.2.2 (`qemu-10.2.2-1.fc44`), rustc 1.97.1, host aarch64, `-M virt -cpu
+cortex-a72 -display none -no-reboot -nic none`. The kernel used was this repository's tree at
+`6bdc1fac`, copied outside `kernel/` and patched there — no file under `kernel/` was modified.
+
+**1. The premise, refuted.** ELF via `-kernel`, halted, before any instruction executes: `x/10xw
+0x40000000` reads all zeros; a dump of all 128 MiB contains no 4-byte-aligned `0xd00d_feed`;
+`PC = 0x40080000` and every GPR is zero. Repeated at `-m 64M` and `-m 8M`.
+
+**2. `-dtb` refuted.** `-kernel <elf> -dtb virt-128M.dtb`, same dump, same scan: **zero** aligned
+magic hits in 128 MiB. QEMU builds the tree — `-M virt,dumpdtb=file` writes 1,048,576 bytes with
+magic `0xd00dfeed` and version 17 — and does not put it in guest memory, because the code that does
+so sits inside the `is_linux` branch that an ELF never enters.
+
+**3. `-device loader` refuted, and not for the reason expected.** Placing the blob at `0x4000_0000`
+for the ELF is not merely inelegant, it is impossible: QEMU refuses the machine with *"The following
+two regions overlap … virt-128M.dtb (0x40000000 – 0x40100000) … ELF program header segment 0
+(0x40080000 – 0x400817fc)"*. A 1 MiB blob does not fit in a 512 KiB gap.
+
+**4. The Image route, end to end.** The header above was added to `_start` in the copied tree,
+`objcopy -O binary` produced a 6,897-byte flat image, and **that one file** (sha256 prefix
+`53d20893d7bf619dc508b0ae70213601`) was booted at seven RAM sizes with a temporary probe printing
+`x0` and the first two big-endian words at it:
+
+| `-m` | `x0` | word at `x0` | `totalsize` | console | exit |
+| --- | --- | --- | --- | --- | --- |
+| 128M | `0x4400_0000` | `0xd00dfeed` | `0x0010_0000` | `SKYNET_BOOT_OK` | 0 |
+| 64M | `0x4200_0000` | `0xd00dfeed` | `0x0010_0000` | `SKYNET_BOOT_OK` | 0 |
+| 32M | `0x4100_0000` | `0xd00dfeed` | `0x0010_0000` | `SKYNET_BOOT_OK` | 0 |
+| 16M | `0x4080_0000` | `0xd00dfeed` | `0x0010_0000` | `SKYNET_BOOT_OK` | 0 |
+| 8M | `0x4040_0000` | `0xd00dfeed` | `0x0010_0000` | `SKYNET_BOOT_OK` | 0 |
+| 4M | `0x4020_0000` | `0xd00dfeed` | `0x0010_0000` | `SKYNET_BOOT_OK` | 0 |
+| 2M | — | — | — | `Not enough space for DTB after kernel/initrd` | **1** |
+
+Six different addresses from one binary, and the sixth — `-m 32M`, `0x4100_0000` — is in no criterion
+anywhere: a build that had learned the sizes it would be asked about would have to have learned five.
+
+`x1`, `x2` and `x3` were **zero at all six sizes**, established separately from the console probe by
+halting the machine at `break *0x40080000` under gdb and reading the registers at the kernel's first
+instruction, before any kernel code had run. `sp` was zero there too, which is why `_start` sets it
+before doing anything else and why nothing may be pushed above that line.
+
+The **control** is the same source built as an ELF and booted the way `ci/boot-test.sh` does today:
+`x0 = 0`, word at `x0` = 0, `SKYNET_BOOT_OK`, exit 0 — so the difference is the artefact format and
+nothing else.
+
+**5. The blob is present before the first instruction.** With a Linux-format image the blob is a ROM
+region installed at machine reset, so `-S` plus `pmemsave` finds it with the CPU halted. This matters
+for the acceptance criterion T-0006 wrote first: the read can be taken before any kernel code runs,
+so no probe can be accused of reporting its own writes.
+
+**6. The blob says what it should.** Copied out of guest RAM on a halted machine and parsed by an
+independent reader written from §2's description: one `/memory` node at `0x4000_0000` whose size is
+exactly `-m` (`0x800000` at 8M, `0x8000000` at 128M), root `#address-cells` = 2 and `#size-cells` = 2,
+an empty reservation block, maximum node depth 6. It differs from `-M virt,dumpdtb` in exactly 41
+bytes, all inside `/chosen`'s `rng-seed` and `kaslr-seed`, which QEMU randomises per boot.
+
+**7. `--gdb` survives.** With the machine loaded from the flat image and `gdb` given the ELF for
+symbols, `break *0x40080000` hits and reports `_start in section .text`, `$x0 = 0x44000000`, and
+`x/1xg $x0` shows the magic. `ci/boot-test.sh --gdb` therefore keeps working by passing the flat
+image to `-kernel` and the ELF to `gdb`, which is what its own help text already tells the user to do.
+
+**8. The header costs nothing measurable, today.** `objcopy -O binary` of the clean tree is **4,836
+bytes**; with the header and nothing else it is **4,836 bytes**. `.text` grows by exactly 64 bytes,
+from `0x638` to `0x678`, and `.vectors` stays at `0x4008_0800` because the linker script aligns it to
+2 KiB and there were 392 bytes of slack. That is a fact about today's slack, not a free lunch: once
+`.text` crosses 2 KiB the header costs 64 bytes like anything else.
+
+**9. The change is additive.** The header-only build boots **both** ways — as a flat image (`x0` =
+blob) and as an ELF (`x0` = 0) — printing `SKYNET_BOOT_OK` and exiting 0 in both. Nothing breaks
+while `ci/` has not moved yet, which is what makes the ordering in §8 possible.
 
 ### 2. Parsing exactly two things
 
@@ -123,6 +293,14 @@ Device-nGnRnE, where an unaligned load faults.
   NUL-terminated name padded to 4 bytes; `FDT_PROP` (3) followed by `len`, `nameoff`, and `len` bytes
   padded to 4; `FDT_END_NODE` (2); `FDT_NOP` (4); `FDT_END` (9).
 - **Strings block**, at `off_dt_strings`: NUL-terminated property names, indexed by `nameoff`.
+
+Every one of those was exercised against QEMU's real blob by an independent reader written from this
+list alone (§1a, measurement 6). It parsed to `FDT_END` with no unrecognised token, found the
+reservation block's `(0, 0)` terminator where this section says it is, and recovered the memory size
+the machine was given. The header field order, the token values, the 4-byte token alignment, the
+NUL-then-pad name encoding and the `len`/`nameoff` order in `FDT_PROP` are therefore **checked**, not
+merely quoted. Conformance criterion 13 still asks the implementer to check them against the
+specification, because agreeing with one producer is not the same as agreeing with the standard.
 
 **What it extracts, and nothing else:**
 
@@ -179,10 +357,21 @@ Four sources, and the union of them is what the allocator must never hand out:
 
 | Source | Where it comes from |
 | --- | --- |
-| The memory reservation block | the blob |
+| The memory reservation block | the blob. **Measured empty on QEMU virt** — so this path is exercised only by a hand-built blob in §6's tests, and nothing on the gate's machine would notice if it were wrong |
 | The kernel image, including its stack | `KERNEL_BASE` and `__kernel_end`, linker symbols |
-| The device tree blob itself | `DTB_BASE` and the validated `totalsize` |
+| The device tree blob itself | **`x0` and the validated `totalsize`** — not a constant. 1 MiB, somewhere in the middle of RAM, at an address that differs on every machine |
 | The allocator's own bitmap | computed in §4 |
+
+The blob is no longer below the kernel; it is at `ram_base + min(ram_size/2, 128 MiB)`, which at
+`-m 128M` is `0x4400_0000` — 64 MiB into a 128 MiB machine, in the middle of the pool. Two
+consequences follow and neither existed in the first revision. The reservation now *splits* the free
+memory rather than trimming its bottom, so §4's index space must tolerate a reserved run in the
+middle of a region, which it does — reservations are marked in the bitmap, not removed from the
+region list. And the 512 KiB below `KERNEL_BASE` is now ordinary free memory: it holds QEMU's
+40-byte bootloader stub (`ldr x0, =dtb; mov x1..x3, xzr; ldr x4, =entry; br x4`, measured at
+`0x4000_0000`), which is dead the instant it branches. Nothing reserves it, and nothing should —
+but a reader who remembers the first revision will expect that region to be spoken for, and it is
+not.
 
 **Reservations round outward**: the first frame is `floor(base / FRAME_SIZE)` and the last is
 `ceil((base + len) / FRAME_SIZE) - 1`. A frame that is partly reserved is entirely reserved. The
@@ -281,8 +470,12 @@ grant, not the allocation. O-4, recorded now because it is invisible until it is
 `boot_rust` gains a sequence and **no new device-minting site** — it already mints both, and
 `ci/constitution-check.sh --check minting-sites` must report its current count unchanged:
 
+`boot_rust` takes one new parameter — `boot_rust(dtb: u64)` — which is `x0` as the boot protocol left
+it. It is a `u64` and not a pointer: nothing may dereference it before §1's validation has run, and a
+raw integer is the type that says so.
+
 1. mint the console and the power token, as today;
-2. validate the header at `DTB_BASE` and form the blob slice;
+2. validate `dtb` and the 40-byte header at it, per §1, and form the blob slice;
 3. `fdt::parse` → `MemoryMap`;
 4. add the kernel image, the blob and (after sizing) the bitmap to the reservations;
 5. place the bitmap, construct the `FrameAllocator`;
@@ -293,6 +486,10 @@ fixed set of reasons — and powers the machine off. This happens **before** the
 `ci/boot-test.sh` fails on the absent marker while the console says why. No new authority is
 involved: the console and the power token are the two the boot path already holds, and the reasons
 are `&'static [u8]`, so nothing runtime reaches the wire.
+
+**`x0 == 0` gets its own reason.** It is not a corrupt blob; it is the kernel having been booted as an
+ELF, which §1a measured still works on the identical binary. That is a `ci/` configuration fault, and
+a build that reports it as "bad magic" sends whoever reads the console looking in the wrong file.
 
 **`BootResources` gains a third field, and RFC-0001 warned about exactly this.** Its words were that
 `BootResources` must stay a boot-time artefact decomposed at the top of `kernel_main`, and must never
@@ -382,9 +579,9 @@ cost zero image bytes.
   and the frame after it available.
 - A region set with a hole, proving the index space skips it.
 
-What no host test covers is the boot glue: the one unsafe slice construction, the linker symbols, and
-the real blob at `DTB_BASE`. Nothing at M1 can test that except a boot, which is what conformance
-criteria 4 and 5 are for. O-8.
+What no host test covers is the boot glue: the image header, the one unsafe slice construction, the
+linker symbols, and the real blob at whatever address `x0` gave. Nothing at M1 can test that except a
+boot, which is what conformance criteria 4, 5, 5a and 5b are for. O-8.
 
 ### 7. What this hands the MMU
 
@@ -403,10 +600,54 @@ discovered by designing the MMU first and finding the constraint pointing backwa
 - **The frame size is `FRAME_SIZE` from `arch`, and it must equal the translation granule.** Two
   constants that must agree, in two RFCs, is exactly how they come to disagree; a compile-time
   assertion that they are equal belongs in the RFC that introduces the second one.
-- **The device tree's frames stay reserved.** The map is copied out of the blob during boot, so
-  nothing needs it afterwards and its 512 KiB could be reclaimed. Not here: reclaiming memory that
-  something might still hold a reference into is a decision, and this RFC has no way to prove nothing
-  does.
+- **The device tree's frames stay reserved, and that now has a price worth naming.** The blob is
+  **1 MiB**, not the 512 KiB the first revision assumed, and `profiles/nano.toml` declares
+  `ram_max_bytes = 8388608` with `[budget.boot_memory] max_bytes = 1048576`. So on nano the blob is
+  12.5% of the machine's RAM and **exactly 100% of the boot-memory budget**, before the kernel image,
+  before the bitmap, before anything else. Only about 7 KiB of that 1 MiB is content
+  (`size_dt_struct = 0x1b88`); QEMU allocates a megabyte-sized buffer and does not pack it.
+
+  The first revision deferred reclaiming on the grounds that it "has no way to prove nothing does"
+  hold a reference. §2 does prove it, as far as this design goes: the parser retains no reference
+  beyond the call and `MemoryMap` is copied out by value. The remaining holder is the boot path
+  itself, which ends. Reclaiming is still not done *here* — this RFC covers no allocator behaviour
+  after construction, and freeing 256 frames is the allocator's operation — but it moves from "a
+  decision nobody needs to make" to O-10, with a budget number attached.
+
+### 8. What this obliges `ci/` to change, and who owns it
+
+**This is the part of the amendment that cannot be discharged by the person implementing it.** Every
+route out of the measurement in §1a touches the boot contract. `governance/roles.toml` grants `ci/`
+to exactly one role — the **orchestrator** (`may_write = ["ci/", "governance/", …]`). The architect,
+the decomposer and the implementer are each denied it by name, and the implementer's task file
+repeats the denial. So this list is written here because there is nowhere else it can be written, and
+if it is not carried out the kernel half cannot land: a kernel that requires `x0` and a gate that
+boots an ELF produce a machine that reports `SKYNET_MEM_FAIL` and no boot marker, correctly, forever.
+
+| # | Change | File |
+| --- | --- | --- |
+| 1 | Produce the flat image **during the build**, and give it an accessor beside `kernel_binary()`. This is smaller than it sounds: `do_size` already runs `objcopy -O binary "$bin" "$REPO_ROOT/ci/.out/kernel-$PROFILE.bin"`, so the exact artefact exists at a known path — it is simply produced by the wrong step. `--size` does not rebuild and neither does `boot-test`, so a boot test that read that path today would boot whatever the last `--size` left there. Move the objcopy into `do_build`; leave `kernel_binary()` returning the ELF, which gdb and `nm` still need | `ci/build.sh`, `ci/lib.sh` |
+| 2 | Pass the flat image to `-kernel` in `run_boot`; keep passing the **ELF** to `gdb` in `run_gdb`. Measured working: symbols resolve, `break *0x40080000` hits, `$x0` reads the blob address | `ci/boot-test.sh` |
+| 3 | Correct `--contract`. It must state that the artefact is a Linux-format `Image`; that `x0` holds the physical address of a device tree blob at entry and `x1`–`x3` are zero; and that **the address is not fixed** — it is `ram_base + min(ram_size/2, 128 MiB)`, so no kernel may hardcode it. The four `detail` lines that currently say `ALL general-purpose registers ZERO` and `x0 is NOT a device tree pointer … RFC-0001 O-2` become false the moment change 2 lands, and a contract that is false is worse than one that is silent | `ci/boot-test.sh` |
+| 4 | Close **RFC-0001 O-2**. It asked whether to change the artefact, read the blob from an observed placement, or correct the contract. This RFC answers: change the artefact. The record should say so where O-2 is cited | `ci/boot-test.sh` comments |
+
+**Ordering, which is the whole reason this is a list and not a sentence.** §1a measurement 9 showed
+the header-only build boots both ways. That buys a safe sequence, and it is the only one that never
+leaves the gate red:
+
+1. kernel: header, `__image_size`, `boot_rust(dtb: u64)`, and **no parser**. Boots as an ELF (`x0 = 0`,
+   ignored) exactly as today. Gate green.
+2. `ci/`: changes 1–4. Now `-kernel` gets the flat image, `x0` is a blob, the kernel still ignores it.
+   Gate green.
+3. kernel: the parser, the validation and the failure path. `x0` is now load-bearing. Gate green.
+
+Reversing 1 and 2 breaks the build; merging 2 and 3 in either order without 1 breaks the boot test.
+Doing all three at once is possible and puts a `ci/` change and a `kernel/` change in one
+contribution, which the role separation is designed to prevent.
+
+**What is not asked for.** No new CI flag, no RAM-size option, nothing about
+`[budget.boot_memory]` — that is still O-6 and still unmeasured. `--lint`, `--test` and
+`ci/constitution-check.sh` are untouched by any of this.
 
 ## Non-goals
 
@@ -429,28 +670,61 @@ scope creep and not a matter of opinion:
 - **Memory hot-plug, offlining, ballooning, or any policy about exhaustion.** `alloc` returns `None`;
   what a caller does about it is not decided here and is excluded by the objective.
 - **Reporting the memory map on the console.** Needs a portable formatter; RFC-0001 O-4.
-- **Any change to `ci/`.** Two things this design would like are in `ci/` and are recorded as open
-  questions instead.
+- **Writing the `ci/` changes.** §8 lists what must change and names the role that owns it. The
+  architect cannot write them and neither can the implementer; naming them is the most either can do.
+  This is a non-goal in the sense that no patch under `kernel/` may work around them.
+- **A second boot format, or any runtime choice between them.** The kernel does not detect how it was
+  loaded and adapt. `x0 == 0` is a reported failure, not a mode.
+- **EFI, PE/COFF, `res5`, or any boot-time firmware protocol.** `res5` is zero. The image header is
+  four fields the loader reads and six zeros.
 
 ## Constitutional impact
 
 **Invariant 4, frugality *(enforced from M0)*.** Image: an FDT parser and a bitmap allocator, both
 small and both measured rather than estimated here — conformance criterion 2 requires the
 before-and-after size against nano's 192 KiB. The `#[cfg(test)]` code is not in the release binary
-and costs nothing.
+and costs nothing. The boot header costs **0 bytes measured** today and 64 bytes once `.text` crosses
+2 KiB (§1a, measurement 8) — stated that way rather than as "free", because it is free only by
+accident of the current slack.
 
-Boot memory: the bitmap, which is `ceil(frames / 8)` rounded to a frame — 4 KiB under the gate's
-`-m 128M`, one frame on a nano device. Every profile declares `[budget.boot_memory]` with
-`enforced_from = "M1"`, and **nothing in `ci/` measures it**: `ci/build.sh --size` measures the image
-and gate condition 5 calls that. This design is the first to make the number depend on the machine
-rather than on the link. O-6.
+Boot memory, and this is where the amendment costs something real. Three things now claim it:
+
+| Claim | Size | On nano's 8 MiB |
+| --- | --- | --- |
+| Kernel image and stack | `__kernel_end - KERNEL_BASE`, currently 0x11b00 ≈ 71 KiB | 0.9% |
+| The bitmap | `ceil(frames / 8)` rounded to a frame — 4 KiB at `-m 128M`, one frame on nano | 0.05% |
+| **The device tree blob** | **1 MiB, measured, at every RAM size** | **12.5%** |
+
+`profiles/nano.toml` sets `[budget.boot_memory] max_bytes = 1048576` and measures "physical memory
+owned by the kernel once boot completes". A blob the kernel reserves and never releases is owned by
+the kernel by that definition, and it is that budget exactly, to the byte, with nothing left for the
+image or the bitmap. **The nano profile as written cannot hold this design unless the blob's frames
+are released after the map is copied out.** That is O-10, and it is a finding against the design
+rather than against the profile: the profile's number was set before anyone had measured a blob.
+
+Every profile declares `[budget.boot_memory]` with `enforced_from = "M1"`, and **nothing in `ci/`
+measures it**: `ci/build.sh --size` measures the image and gate condition 5 calls that. This design is
+the first to make the number depend on the machine rather than on the link, and now the first to have
+a number that plausibly exceeds a declared budget. O-6, which was a tidiness complaint in the first
+revision and is not one any more.
+
+There is a second, smaller cost. Booting as a Linux-format image imposes a **minimum RAM of 4 MiB**:
+at `-m 2M` QEMU refuses the machine outright with "Not enough space for DTB after kernel/initrd" and
+exits 1 (§1a, measurement 4). nano declares 8 MiB as a ceiling and not a floor, so nothing in
+`profiles/` is violated — but the ELF path had no floor at all, and a floor introduced by a boot
+format is the kind of thing discovered later by someone porting to a smaller board.
 
 **Invariant 6, HAL boundary *(enforced from M0)*.** The parser and the allocator are portable, and
 deliberately so: the flattened device tree is a data format, not an architecture. What stays in
-`arch/` is what is genuinely architectural or board-specific — `DTB_BASE`, `DTB_MAX_LEN`,
-`FRAME_SIZE`, the linker symbols, and the one unsafe slice construction. No portable file names an
-architecture, uses a `cfg`, or assumes a word size: physical addresses are `u64` precisely so that a
-32-bit port with a wider physical address space is not a silent truncation waiting to be found.
+`arch/` is what is genuinely architectural or board-specific — `FRAME_SIZE`, the image header, the
+linker symbols, `boot_rust`'s `x0` parameter, and the one unsafe slice construction. `MAX_BLOB_LEN`
+is portable, in `fdt.rs`, because it bounds the parser's appetite rather than describing a board.
+
+The amendment **improves** this boundary rather than straining it: `platform.rs` gains no constant at
+all now, where the first revision added two. The kernel's only new address is one it was handed.
+No portable file names an architecture, uses a `cfg`, or assumes a word size: physical addresses are
+`u64` precisely so that a 32-bit port with a wider physical address space is not a silent truncation
+waiting to be found.
 
 **Invariant 7, no kernel dependencies *(enforced from M0)*.** `fdt`, `device-tree`, `dtb-parser`,
 `vfdt` and half a dozen others exist and do this job well. Writing it is the invariant, and the
@@ -485,12 +759,22 @@ created; one owner, moved once. *Refuse:* nothing attested.
 emit is a compile-time constant, so no discovered value — no memory size, no address — reaches the
 console at all.
 
-**Invariant 3, total provenance *(enforced now)*.** This RFC records three things a later reader
-would otherwise rediscover: that the boot contract, having been corrected about `x0`, still does not
-promise that a device tree exists or say where it is, so this design depends on something the
-contract does not offer; that today's `build.rs` breaks `cargo test` and by exactly what mechanism;
-and that the blob's placement at `0x4000_0000` is read from QEMU's source in RFC-0001 and was **not**
-re-verified here, because this machine has no QEMU installed.
+**Invariant 3, total provenance *(enforced now)*.** The first revision recorded honestly that its
+central premise was unverified, and named the reason: no QEMU on the machine. That record is the only
+reason the task's first acceptance criterion existed, and the criterion is what stopped the work
+before a parser was written for a blob that was not there. The amendment's obligation is to leave the
+next reader no worse equipped:
+
+- every corrected claim is kept, struck through, with the measurement beside it (§0, and the table at
+  the top of this document) rather than quietly replaced;
+- §1a gives the machine, the QEMU build, the date, the artefact hash and the command shape for each
+  of nine measurements, so a reviewer re-runs rather than re-derives;
+- the one binary booted at seven RAM sizes is identified by hash, because two builds at two sizes are
+  not a measurement of a machine — a lesson this repository paid for twice on the fault path;
+- what is still *not* verified is said plainly: §2's constants agree with one producer's blob, not
+  with the specification (criterion 13 remains); `MAX_REGIONS` and `MAX_RESERVED` are still guesses
+  with one data point (O-3); and the reservation-block path is unexercised by any real blob, because
+  QEMU virt's block is empty (§3).
 
 **Invariant 10, English repository.** All identifiers, comments and prose in English.
 
@@ -506,12 +790,22 @@ re-verified here, because this machine has no QEMU installed.
    which that check does anything, and RFC-0001 O-5 predicted it would fail. If it fails at link with
    the linker script named in the error, `build.rs` still uses `rustc-link-arg` where §6 requires
    `rustc-link-arg-bins`.
-4. **PROOF:** boot under `-m 128M` and again under `-m 8M`, with temporary instrumentation printing
-   the frame count, and show the two counts differ and match the machine. A build that hardcodes a
-   size passes every other criterion here; this is the one that fails it. Remove the instrumentation
-   before submitting, as RFC-0002's proofs do.
-5. **PROOF:** boot with the first four bytes at `DTB_BASE` corrupted, and show `SKYNET_MEM_FAIL` with
-   a reason, no boot marker, and a clean exit — not a timeout, not a panic marker.
+4. **PROOF:** boot **one** flat image — stated by hash — under `-m 128M`, `-m 64M` and `-m 8M`, with
+   temporary instrumentation printing the frame count, and show three counts that differ and match
+   the machine. A build that hardcodes a size passes every other criterion here; this is the one that
+   fails it. `-m 64M` is named because it is in no other criterion: a build that learned the two sizes
+   it would be asked about passes a two-size proof. Remove the instrumentation before submitting, as
+   RFC-0002's proofs do.
+5. **PROOF:** boot with the four magic bytes **at the address in `x0`** corrupted, and show
+   `SKYNET_MEM_FAIL` with a reason, no boot marker, and a clean exit — not a timeout, not a panic
+   marker. State how the write was established to land before the kernel's read; §1a measurement 5
+   shows the blob is present on a halted machine, which is the window to use.
+5a. **PROOF:** boot the same binary as an **ELF**, and show `SKYNET_MEM_FAIL` with the `x0 == 0`
+   reason — distinct from the bad-magic reason — no boot marker, clean exit. This is the failure a
+   misconfigured `ci/` produces, and it must name itself.
+5b. **PROOF:** `readelf -h` and a hex dump of the first 64 bytes of `objcopy -O binary` output show
+   `code0` a branch, `text_offset = 0x80000`, `image_size` equal to `__kernel_end - KERNEL_BASE`, and
+   `0x644d5241` at offset 56. State the flat image's size and `nm`'s address for `_start`.
 6. `grep -c '^\[\[package\]\]' kernel/Cargo.lock` is 1, and `kernel/Cargo.toml` still declares no
    dependency section of any kind.
 7. `ci/constitution-check.sh --check hal-boundary`, `--check no-kernel-deps`, `--check
@@ -522,8 +816,17 @@ re-verified here, because this machine has no QEMU installed.
    `lib.rs` contain none of them.
 9. `grep -rn 'static' kernel/src` finds exactly one `static` item, `IN_FAILURE`, and no `static mut`.
    The bitmap is not a static.
-10. `nm` on the built ELF still places `_start` at `0x4008_0000`, and `ci/lib.sh:kernel_binary()`
-    still finds the binary — the package and binary names are unchanged by the library split.
+10. `nm` on the built ELF still places `_start` at `0x4008_0000` — the image header is the first 64
+    bytes *of* `_start`, not a prefix bolted onto the artefact, so RFC-0001's C16 is unaffected — and
+    `ci/lib.sh:kernel_binary()` still finds the ELF.
+10a. `readelf -S` shows `.vectors` present, non-zero, and 2 KiB aligned, checked with the tool rather
+    than with `ci/constitution-check.sh --check vector-alignment`, which reports skip and exits 0 when
+    the section is absent. The header sits in `.text.boot`, ahead of the table, and §1a measurement 8
+    showed it moving `.text`'s end from `0x638` to `0x678` without moving `.vectors`; a contribution
+    whose `.text` has grown past `0x800` will move it, legally, and must say so.
+10b. The kernel names no address constant that was not in `platform.rs` before this change.
+    `grep -rn 'DTB_BASE\|DTB_MAX_LEN' kernel/` is empty: both were deleted, and `MAX_BLOB_LEN` is in
+    portable `fdt.rs`.
 
 **PROOF — run these, do not assert them.**
 
@@ -548,6 +851,60 @@ re-verified here, because this machine has no QEMU installed.
 
 ## Alternatives considered
 
+### For how the kernel obtains a device tree (amendment)
+
+Three routes were on the table when the premise failed. Each was run, not argued.
+
+**`-dtb <file>` with the ELF unchanged.** The cheapest by a wide margin: one flag in `ci/`, no change
+to the artefact, no image header, no `KERNEL_BASE` question, and RFC-0003 O-1 named it first.
+**Rejected because it does not work.** `-kernel <elf> -dtb <blob>` places nothing: a scan of all
+128 MiB of guest RAM finds no aligned `0xd00d_feed` (§1a, measurement 2). QEMU builds the tree and
+discards it, because the code that writes it into memory is inside the `is_linux` branch and an ELF
+never enters it. This is worth stating flatly, because "just pass `-dtb`" is what the ledger entry
+that released T-0006 suggested and what any reader would try first. It is not a trade-off. It is a
+no-op.
+
+**`-device loader,file=<dtb>,addr=0x40000000` with the ELF unchanged.** The natural repair once
+`-dtb` is found not to work: QEMU's generic loader writes an arbitrary file to an arbitrary guest
+address, which would put a blob exactly where the first revision believed one already was.
+**Rejected because QEMU refuses the machine**: the blob is 1 MiB and the gap below `KERNEL_BASE` is
+512 KiB, so the regions overlap and QEMU exits with an error naming both (§1a, measurement 3). Even
+had it fit, the objection stands that the address would be a constant agreed between a CI script and
+a kernel with nothing checking they still agree — and objective 0002's criterion 2 asks for a memory
+map "from the device tree rather than from constants", which a blob placed at an address the kernel
+was told to expect satisfies only in letter.
+
+**Discovering memory with no device tree at all, deferring the parser to M2.** The most interesting
+of the three, because it is the only one that touches no other role's files. The mechanism would be a
+probe: read or write-and-read-back at increasing addresses until the access stops working, and call
+the last address that worked the top of RAM. §1a measurement of the fault behaviour says the
+mechanism exists — a read one word past the RAM top raises a synchronous external abort with
+`ESR_EL1 = 0x9600_0010` and `FAR_EL1` naming the address, reported cleanly by the vector table, at
+both `-m 8M` and `-m 128M`. **Rejected on four counts, in increasing order of severity:**
+
+1. It needs a fault the kernel can *return from*. Today's handler is fail-stop by design: it reports
+   and powers off. A recoverable-fault path with a fixup table is a design of its own, in the same
+   file RFC-0002 built and T-0005 is still repairing.
+2. It needs the RAM base and a stride as constants. That is the objective's criterion 2 failing on a
+   technicality — a constant by another name, exactly as the brief for this amendment put it.
+3. It finds a top and nothing else. Not the reservation block, not a second region, not a hole. A
+   probe that walks upward across a gap reports the far side as absent, or reports the near side as
+   present past its end, depending on which way it errs.
+4. The write-and-read-back variant is destructive. At M1 the only things it can destroy are the kernel
+   and — under the Image route — the device tree. It is the one option here that can corrupt the
+   evidence of its own failure.
+
+**Chosen: boot as a Linux-format `Image`.** RFC-0001 considered it as "a raw binary as the boot
+artefact instead of an ELF", rejected it because it requires changing `ci/`, and said in terms that it
+"is the likely resolution of O-2 and should be considered on its merits at M1, not worked around
+now". This is M1 and these are its merits: `x0` carries the blob at every RAM size from 4 MiB to
+128 MiB; the kernel adds no address constant; `KERNEL_BASE` and `_start`'s address are unchanged;
+`--gdb` still resolves symbols; the artefact costs 0 measured bytes today; and the same binary still
+boots as an ELF, so nothing is broken while `ci/` catches up. Its costs are 1 MiB of guest RAM, a
+4 MiB floor on machine size, and four changes in a file this role may not write — all in §8.
+
+### For the allocator and the parser
+
 **A free list threaded through the free frames.** The most tempting alternative, and the classic one:
 no metadata at all, O(1) both ways, and it needs no bitmap and no placement problem. Rejected in §4
 because it writes to every frame it manages, which forces the next RFC to choose between a
@@ -560,15 +917,26 @@ smallest, which makes the kernel refuse memory it was given. The kernel does not
 build time and nothing gives it one.
 
 **Requiring exactly one memory region, failing on two.** Smaller by the whole index-mapping section,
-and correct for QEMU virt today. Rejected because QEMU itself produces a second memory node once RAM
-crosses into high memory, and the `standard` profile is "> 1 GiB" — the failure would arrive with the
-first realistic machine, presented as a kernel that does not boot.
+and correct for QEMU virt today. The first revision rejected it on the grounds that "QEMU itself
+produces a second memory node once RAM crosses into high memory". **That reason is wrong and is
+withdrawn:** `-M virt` reports a single `/memory` node at `0x4000_0000` at `-m 4G`, `8G` and `16G`,
+with `size` equal to `-m` in each case (§1a). Larger sizes could not be checked — `dumpdtb` allocates
+the guest's RAM, and this host refused at 255 GiB.
 
-**Searching a range for the FDT magic.** Robust against QEMU changing where it places the blob, which
-is the exact fragility O-1 is about. Rejected because a search that finds `0xd00d_feed` in
-uninitialised RAM produces a memory map from noise, and every later guarantee in this milestone rests
-on that map being true. A fixed address that fails loudly is worth more than a search that succeeds
-plausibly.
+It is rejected anyway, on the reason that was always the better one: the multi-region case is not
+QEMU's, it is real hardware's, and M9 is where this kernel meets a board whose RAM is not one
+contiguous run. Writing an index space that tolerates a hole costs about thirty lines now and is a
+rewrite of the allocator later. Recorded with the correction attached, because a rejection that
+survives its own stated reason being false deserves to say so out loud rather than be quietly
+re-justified.
+
+**Searching RAM for the FDT magic.** Robust against the loader placing the blob anywhere, which is
+the exact fragility O-1 was about — and §1a proved the placement really does move, six different
+addresses from one binary. Rejected because a search that finds `0xd00d_feed` in uninitialised RAM
+produces a memory map from noise, and every later guarantee in this milestone rests on that map being
+true. The amendment strengthens the rejection rather than weakening it: `x0` gives one address,
+supplied by the loader that placed the blob, checked hard, with no window to scan. A search is what
+you do when nobody tells you; the point of the Image route is that somebody does.
 
 **Falling back to a constant memory size when no device tree is found.** It would make the kernel
 boot on any machine, and it is what the objective's criterion 2 forbids in so many words. Recorded
@@ -591,28 +959,40 @@ else. O-2.
 
 ## Open questions
 
-**O-1.** How the kernel finds the device tree is the weakest part of this design, and it cannot be
-fixed from inside `kernel/`. `x0` is zero because the artefact is an ELF; the blob's placement at
-`0x4000_0000` is QEMU's behaviour read from its source in RFC-0001, not a contract, and not
-re-verified here — this machine has no `qemu-system-aarch64` and no `dtc`, so the first person to run
-the implementation is also the first to test the premise. The boot contract lists what the kernel may
-rely on and a device tree is not among the entries; this design relies on one anyway, which is a gap
-between what is promised and what is used, not a defect in either. The durable fixes are all in
-`ci/`, which neither the architect nor the implementer may write: change the artefact to a raw
-`Image`, so QEMU writes the pointer into `x0` and the kernel is told rather than guessing; pass
-`-dtb <file>` and a known address; or add the placement to the contract, so that the thing the kernel
-depends on is the thing CI promises. Recorded so that when the probe breaks, the answer is not a
-search and not a fallback.
+**O-1 (answered, and it was the bad answer).** The first revision recorded that the blob's placement
+at `0x4000_0000` was read from QEMU's source and never run, and that "the first person to run the
+implementation is also the first to test the premise". That happened: T-0006 was claimed, its first
+acceptance criterion was run before any code was written, and the premise was false in both halves —
+no blob is placed for an ELF, and the placement named was impossible anyway for a blob twice the size
+of the gap. The task was released rather than patched around, which is what its `OPEN` criterion
+instructed and the reason that criterion was written first.
+
+Of the three fixes O-1 listed, one works and two do not. `-dtb <file>` places nothing; adding the
+placement to the contract would document an address that does not exist. Changing the artefact to a
+Linux-format `Image` works, and §1 is now built on it. What remains open is not the kernel's half but
+`ci/`'s: **§8 is the live part of this question**, and until it is carried out the design describes a
+kernel that cannot boot. It is recorded there rather than here because an obligation on another role
+belongs in the design, where a reviewer reads it, and not in a list of things the architect could not
+settle.
+
+The durable lesson is smaller than the finding and worth keeping: this document asserted a hardware
+placement from source it had read and could not run, marked it clearly as unverified, and the marking
+was enough — the decomposer turned it into a criterion and the criterion stopped the work. The
+failure mode this project should still fear is the unverified sentence that is *not* marked.
 
 **O-2.** `/reserved-memory` is not parsed. On QEMU virt nothing populates it. On real hardware it is
 how firmware says "this memory is mine", and a kernel that hands such a frame out corrupts something
 with no fault and no report. It belongs with real hardware at M9, or with the first board that
 declares one, whichever comes first.
 
-**O-3.** `MAX_REGIONS = 8` and `MAX_RESERVED = 16` are guesses. Nothing in this repository establishes
-what a real board reports, and the allocator cannot allocate its own arrays because it is the
-allocator. The failure is legible rather than silent, which is the most this can offer; the numbers
-should be revisited by whoever first meets hardware.
+**O-3.** `MAX_REGIONS = 8` and `MAX_RESERVED = 16` are guesses, now with exactly one data point
+against them: QEMU virt reports **one** memory region and **zero** reservations, at every size from
+8 MiB to 16 GiB. That confirms the guesses are generous and confirms nothing about a real board, and
+the allocator cannot allocate its own arrays because it is the allocator. The failure is legible
+rather than silent, which is the most this can offer; the numbers should be revisited by whoever first
+meets hardware. A consequence worth naming separately: because virt's reservation block is empty, the
+whole reservation-block code path is exercised only by §6's hand-built blobs. Nothing the gate boots
+would notice if it were wrong.
 
 **O-4.** Frames are not zeroed. Nothing at M1 hands one across a trust boundary, so today this leaks
 nothing. At M3 a frame reaching EL0 with a previous holder's contents is a disclosure, and at M4 it
@@ -647,3 +1027,33 @@ conformance criteria 4 and 5 cover the machine with temporary instrumentation th
 Between them sits code that is exercised on every boot and asserted by nothing, and the honest
 description of the
 gap is that a boot marker proves the path did not fault, not that it computed the right map.
+
+**O-9 (opened by the amendment; the live half of O-1).** §8's four `ci/` changes are owned by the
+orchestrator and cannot be made by any role that can write `kernel/` or `rfcs/`. Two of them are
+mechanical and one is not: correcting `--contract` means deciding what the project *promises* about
+the boot artefact, which is a contract question and not a script edit. Specifically — is
+"the artefact is a Linux-format `Image` and `x0` holds a device tree pointer" a promise CI makes to
+the kernel, revisable when the machine changes, or a property the kernel may assume forever? RFC-0001
+answered the analogous question the wrong way round once already, by writing `x0 = device tree blob
+pointer` into the contract when the artefact made it false. The correction should not create the
+mirror-image error by writing the artefact format into the kernel and leaving the contract silent
+about it.
+
+**O-10 (opened by the amendment).** The device tree blob is 1 MiB and `profiles/nano.toml` budgets
+1 MiB of boot memory. Reserved and never released, the blob is that budget entirely — so either the
+blob's 256 frames are freed after §2 copies the map out, or the nano profile is amended by vote, or
+the invariant is violated on the smallest machine the project claims to serve. This RFC does not
+choose, because freeing frames is allocator behaviour after construction and nothing here specifies
+that. What it can supply is the argument the chooser needs: §2's parser retains no reference to the
+blob, `MemoryMap` is copied out by value, and the only remaining holder is a boot path that ends —
+so the safety case for releasing them is already made, and what is missing is a design decision about
+whether boot-time memory is released at all. It should be settled with the MMU RFC, which is the
+first thing that will want the blob's address space for something else, and it should be settled
+before `ci/` gains a boot-memory check (O-6) rather than by that check failing.
+
+**O-11 (opened by the amendment).** The Image route imposes a 4 MiB floor on machine size: at
+`-m 2M` QEMU refuses the machine before the kernel runs. Nothing in `profiles/` declares a minimum
+RAM — `nano.toml` gives `ram_max_bytes` and no `ram_min_bytes` — so there is no field this fact
+contradicts and no check it would fail. It is recorded because a floor introduced by a boot format is
+invisible until someone ports to a board below it, and because the number is not the kernel's: it is
+1 MiB of blob plus QEMU's placement rule, and a different loader would have a different floor.

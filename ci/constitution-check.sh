@@ -307,6 +307,37 @@ check_panel_leak() {
     # past the baseline for exactly that reason: `found` was in this pattern and
     # not in the verdict one, so there was nothing for it to match against.
     # Sentences of this shape are matched separately, below.
+    # Use versus mention.
+    #
+    # Review tested this rather than arguing it: an asserted attribution failed
+    # (right), the same string quoted and framed as a removal failed, a commit
+    # message quoting a line it had deleted failed, and only class-only
+    # description or plain paraphrase passed. So the practice this repository
+    # adopted — describe the class, never the text — was not a choice. It was the
+    # only form this check permitted, and the check was stricter than the rule it
+    # enforces: SEPARATION_OF_POWERS.md asks for description without attribution,
+    # not for silence about what was removed.
+    #
+    # A rule stricter than its own statement is a rule nobody can reason about.
+    # Quoted spans are therefore removed before matching, so that recording what
+    # was deleted is possible — and the mention branch is REPORTED, because a
+    # quotation is still a place a leak can hide and an unread exemption is how
+    # every fail-open in this repository began.
+    _strip_mentions() {
+        python3 -c '
+import re, sys
+t = sys.stdin.read()
+mentioned = []
+def take(m):
+    mentioned.append(m.group(0))
+    return " [quoted] "
+t = re.sub(r"\"[^\"\n]{0,200}\"|`[^`\n]{0,200}`", take, t)
+sys.stdout.write(t)
+for q in mentioned:
+    sys.stderr.write(q + "\n")
+'
+    }
+
     local selfstanding='(a|an|the|one|two|three|four|five|six|both|all|every|several|multiple|independent) +(judges?|reviewers?|guardians?|panel(list)?s?) +(found|reported|measured|noted|flagged|refused|approved|rejected|verified|agreed|caught|raised|said|demonstrated|disagreed)'
     selfstanding="$selfstanding"'|(judges?|reviewers?|guardians?|panel(list)?s?) +(found|reported|measured|refused|approved|rejected|demonstrated|disagreed) +(it|that|this|the)'
     # Vocabulary, and the reason it is this wide.
@@ -389,11 +420,11 @@ check_panel_leak() {
         # sentence, so the text is unwrapped before the rule is applied.
         msgs=$(git log --since="$LEAK_BASELINE_DATE" --format='%h %s%n%b%n@@' "main..$br" 2>/dev/null \
                | awk '{ if ($0=="@@") { print buf; buf="" } else { buf = buf " " $0 } } END { print buf }' \
-               | grep -niE "($judges)" | grep -iE "($verdicts)" || true)
+               | _strip_mentions 2>/dev/null | grep -niE "($judges)" | grep -iE "($verdicts)" || true)
         msgs="$msgs
 $(git log --since="$LEAK_BASELINE_DATE" --format='%h %s%n%b%n@@' "main..$br" 2>/dev/null \
   | awk '{ if ($0=="@@") { print buf; buf="" } else { buf = buf " " $0 } } END { print buf }' \
-  | grep -niE "($selfstanding)" || true)"
+  | _strip_mentions 2>/dev/null | grep -niE "($selfstanding)" || true)"
         msgs=$(printf '%s\n' "$msgs" | grep -v '^$' || true)
         [ -n "$msgs" ] || continue
         fail "commit messages on $br name a judge beside a verdict"

@@ -38,10 +38,19 @@
  *     ... minus the address of vector entry 4
  *         past this, the processor branches into rubbish and storms
  *
- * A single stack frame larger than the last distance reaches the vector table in
- * one instruction, touching nothing on the way, so nothing detects it. That is
- * ordinary Rust and no ordering prevents it. The answer is a guard page, which
- * needs the MMU. Carried with its measurements in tasks/open/T-0008.toml.
+ * A single stack frame larger than the last distance would reach the vector table
+ * without touching anything on the way, and no ordering prevents that. Whether
+ * this compiler emits such a frame is a separate question, and the answer
+ * measured on the bare-metal target is NO: rustc 1.97.1 emits a probe loop that
+ * steps 4,096 bytes and touches every page, so the descent faults on the way
+ * down rather than landing.
+ *
+ * An earlier version of this paragraph said "that is ordinary Rust", which two
+ * independent measurements now contradict. It stays as a hazard rather than a
+ * fact because it is a property of the compiler and not of the architecture: a
+ * flag, a version or a different backend removes the probe and nothing here
+ * would notice. The answer that does not depend on a compiler is a guard page,
+ * which needs the MMU. Carried in tasks/open/T-0008.toml.
  *
  * The history of how these were got wrong — three probes, each of which changed
  * the image it measured — is in .provenance/ledger.jsonl, which is append-only

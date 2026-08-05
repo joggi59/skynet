@@ -198,8 +198,14 @@ SECTIONS
      * eighty-four. `objdump -h` and `nm` give it. */
     ASSERT(ADDR(.text) < ADDR(.got),
            "code is above data the failure path does not need: the distance from the stack to the last instruction of .text collapses, and no other check sees it")
+    /* Highest, with nothing after it — and the second half is the part that
+     * needed saying. `ADDR(.stack) > ADDR(.text)` only compares against a named
+     * section, so an ORPHAN placed above the stack passed it: review linked one
+     * at 70,884 bytes with every check green and the size budget reporting 36%
+     * used. Comparing `__stack_top` with `__kernel_end` names nothing and
+     * therefore misses nothing. */
     ASSERT(ADDR(.stack) > ADDR(.text),
-           "the stack is not the highest section: it grows down through the failure path and the vector table, and every other check in this repository stays green while it does")
+           "the stack is not above the code: it grows down through the failure path and the vector table")
     ASSERT(SIZEOF(.guard) >= 4,
            "the re-entrancy guard section is empty or too small: nothing is holding the flag")
 
@@ -223,6 +229,9 @@ SECTIONS
     }
 
     __kernel_end = .;
+
+    ASSERT(__stack_top == __kernel_end,
+           "something is placed above the stack: it is no longer the highest section, and an orphan there inflates the image while the size budget still reports PASS")
 
     /DISCARD/ : { *(.comment) *(.note.*) *(.eh_frame) *(.eh_frame_hdr) }
 }

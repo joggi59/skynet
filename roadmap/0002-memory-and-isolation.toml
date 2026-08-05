@@ -85,6 +85,34 @@ criteria = [
     "Every one of the above holds on the nano profile's budget, or the profile is amended by vote rather than by convenience",
 ]
 
+# ---------------------------------------------------------------------------
+# DIRECTION FROM THE HUMAN DIRECTOR, 2026-08-05
+#
+# Criterion 6 above binds this objective to the nano profile, and the memory
+# route in rfcs/0003 spends 100% of nano's [budget.boot_memory] on the device
+# tree blob alone — filed by the architect as a finding against its own design
+# rather than absorbed.
+#
+# The criterion says that budget is amended by vote and not by convenience. It
+# was raised to the human director as the first question this process produced
+# that no agent may answer, and the direction given was: set the watch aside for
+# now.
+#
+# So criterion 6 is DEFERRED, not amended and not quietly satisfied. What that
+# means, precisely, because the difference is the whole point of the criterion:
+#
+#   - `standard` is the binding profile for criteria 2 through 5. Work proceeds
+#     against it and reports against it.
+#   - nano's budgets are NOT changed. No agent has authority to widen them, and
+#     nothing in this deferral does.
+#   - criterion 6 remains unmet and is recorded as such. It becomes due when the
+#     profile is voted on, which is objective 0001's G3, not this objective.
+#
+# A design that fits `standard` and not `nano` is a design that has not yet met
+# this objective. Deferring the constraint is not the same as clearing it, and an
+# agent reading this later should not treat the two as interchangeable.
+# ---------------------------------------------------------------------------
+
 [objective.non_goals]
 excluded = [
     "User space, EL0, system calls — M3, and they need this first",

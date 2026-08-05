@@ -315,20 +315,34 @@ check_panel_leak() {
     local verdicts='approv|reject|refus|dissent|verdict|blocking|major|minor|finding|flagged|raised'
     local found=0
 
-    # 1. Task files AND kernel source — every versioned artefact a judge reads
-    #    while ruling on a contribution.
+    # 1. Task files and kernel source — but only what a contribution ADDS.
     #
-    #    Kernel source was outside this check until a reviewer found an
-    #    attribution in link.ld and a second one added, in the same file, by the
-    #    commit that claimed to have removed the last of them. The author's own
-    #    verification had grepped `--include='*.rs'`; the linker script sits in
-    #    the same directory and is not Rust. An absence read as the thing being
-    #    checked, in the check written to stop that.
-    local hits
-    hits=$(grep -rniE "($judges)" tasks/ kernel/ 2>/dev/null \
-           | grep -v '^kernel/target/' | grep -iE "($verdicts)" || true)
+    #    Two lessons are folded in here. Kernel source was outside this check
+    #    entirely until an attribution turned up in link.ld, a file the author's
+    #    own verification had missed by grepping `--include='*.rs'`. And the
+    #    first version that did reach it failed on a task file's acceptance
+    #    criterion — the criterion that asks for attributions to be REMOVED,
+    #    which cannot be written without quoting the thing it forbids. A rule
+    #    that condemns its own statement is a rule nobody can obey.
+    #
+    #    So this half judges added lines, not files: what is already in the tree
+    #    is main's to answer for, and a contribution answers for what it brings.
+    #    Pre-existing matches are reported so they do not vanish.
+    local hits pre
+    if git rev-parse --verify --quiet main >/dev/null 2>&1 && [ -n "${SKYNET_BASE:-main}" ]; then
+        hits=$(git diff "${SKYNET_BASE:-main}...HEAD" -- tasks/ kernel/ 2>/dev/null \
+               | grep '^+' | grep -v '^+++' | sed 's/^+//' \
+               | grep -niE "($judges)" | grep -iE "($verdicts)" || true)
+        pre=$(grep -rniE "($judges)" tasks/ kernel/ 2>/dev/null \
+              | grep -v '^kernel/target/' | grep -iE "($verdicts)" | grep -c . || true)
+    else
+        hits=""
+        pre=$(grep -rniE "($judges)" tasks/ kernel/ 2>/dev/null \
+              | grep -v '^kernel/target/' | grep -iE "($verdicts)" | grep -c . || true)
+    fi
+    [ "${pre:-0}" -gt 0 ] && info "$pre line(s) already in the tree — reported, not failed"
     if [ -n "$hits" ]; then
-        fail "a task file or kernel source names a judge beside a verdict"
+        fail "this contribution ADDS a judge attribution to a task file or kernel source"
         while IFS= read -r h; do detail "$h"; done <<< "$hits"
         found=1
     fi

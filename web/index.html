@@ -251,8 +251,11 @@ footer { border-top:var(--rule-w) solid var(--rule); padding-block:2.4rem 3.2rem
       <div class="st-row"><span>The <strong>system starts up</strong> on a simulated computer, says it
         is alive, and shuts down cleanly</span><span class="badge b-yes">Working</span></div>
       <div class="st-row"><span>It <strong>reports its own faults</strong> legibly instead of hanging
-        silently — the first thing that makes the rest debuggable. Refused three times by its own
-        review process before it was allowed in</span><span class="badge b-yes">Working</span></div>
+        silently — the class, the faulting address, the instruction. The first thing that makes the
+        rest debuggable</span><span class="badge b-yes">Working</span></div>
+      <div class="st-row"><span>It <strong>survives its own stack running out</strong> — the failure
+        path is placed where an overflow reaches it last, and asserted there at link time. Under
+        review; the remaining cases need the memory unit</span><span class="badge b-now">In review</span></div>
       <div class="st-row"><span>The <strong>public voting site</strong> where people set the
         priorities</span><span class="badge b-now">Being built</span></div>
       <div class="st-row"><span><strong>Memory, running programs, files, a screen</strong> — everything
@@ -264,9 +267,10 @@ footer { border-top:var(--rule-w) solid var(--rule); padding-block:2.4rem 3.2rem
 
     <div class="scale">
       <h3>How far is it, really?</h3>
-      <p>Two numbers say it better than a paragraph. The kernel is <strong>453 lines of code</strong>.
-        The machinery built to review, judge and record changes to it is <strong>7,100</strong>.</p>
-      <p>That ratio is fifteen to one. It was thirty to one a cycle ago, and it is closing the right
+      <p>Two numbers say it better than a paragraph. The kernel is <strong>453 lines of code</strong>,
+        with another <strong>124</strong> under review. The machinery built to review, judge and record
+        changes to it is <strong>7,100</strong>.</p>
+      <p>That ratio is fifteen to one. It was thirty to one two cycles ago, and it is closing the right
         way — by the kernel growing, not by the process being trimmed. The process is the part that
         has to be right before there is anything worth protecting.</p>
       <div class="scale-bar" aria-hidden="true">
@@ -282,18 +286,30 @@ footer { border-top:var(--rule-w) solid var(--rule); padding-block:2.4rem 3.2rem
         can check accumulating faster than anyone can review it.</p>
     </div>
 
-    <p class="small">What the process has done so far, since it started running: <strong>56 independent
-      verdicts</strong> across eleven submissions, <strong>~310 findings</strong> of which 10 were serious
-      enough to block a merge, and <strong>only 3 changes merged</strong>. Most of those findings were
-      not in the kernel — they were in the machinery, and in the claims its author made about it.</p>
+    <p class="small">What the process has done so far: <strong>92 independent verdicts</strong> across
+      eighteen submissions, <strong>470 findings</strong>, and <strong>only 3 changes merged</strong>.
+      Twenty-four of those verdicts were refusals. Most findings were not in the kernel — they were in
+      the machinery, and in the claims its author made about it.</p>
 
-    <p class="small">The record keeps its own failures too. Of the fifteen entries in the permanent
-      ledger, <strong>eight are governance defects</strong> and every one is the process failing at
+    <p class="small">One number is worth more than the rest. The kernel's fault path has been refused
+      <strong>five times</strong>, and each refusal named something real: a fault storm of 3.9 million
+      exceptions with a blank console, a guard byte that could silence the very first fault, a console
+      that never drains, a loop that could not be stopped because it never raised a fault at all. None
+      of those was found by reading. All were found by a judge building the machine and breaking it.</p>
+
+    <p class="small">The record keeps its own failures too. Of the eighteen entries in the permanent
+      ledger, <strong>nine are governance defects</strong> and every one is the process failing at
       itself: a judge handed a description of the work that was false in both halves, thirteen commit
       messages destroyed while cleaning up a fourth, a tool that reissued an identifier belonging to a
       change already judged, and a mitigating sentence written into a record of its own mistake. Each
       was found by a judge. None was found by a check. They are in the ledger because a system that
       records only its successes is a brochure.</p>
+
+    <p class="small">The most useful of them is not a bug in the operating system. Eleven measurements
+      published about the kernel turned out to be wrong, and the reason was the same every time: the
+      instrument. A probe that destroys its own code reports where it died. A probe that adds code to
+      the image moves the thing it is measuring. Nobody audited the instrument for four review cycles
+      because everyone, including its author, was busy correcting the numbers it produced.</p>
   </div>
 </section>
 

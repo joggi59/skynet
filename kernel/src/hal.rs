@@ -19,8 +19,19 @@
 
 /// A byte sink reaching the operator's boot console.
 pub trait Console {
-    /// Write every byte of `bytes`, in order, returning only once the device
-    /// has accepted all of them.
+    /// Write bytes in order, returning when the device has taken them — or when
+    /// an implementation has established that it will not.
+    ///
+    /// The contract used to promise every byte and a return only once the device
+    /// had accepted each one. An implementation cannot honour that: a device
+    /// that answers and never drains makes it a promise to hang, and a kernel
+    /// that hangs in its console cannot report why. Callers must not assume all
+    /// bytes reached the wire; nothing in this kernel does.
+    ///
+    /// This is a portable file, which the task forbids touching. It is touched
+    /// because the sentence became false when the arch implementation gained a
+    /// bound, and a trait's contract that no implementation keeps is worse than
+    /// a changed line.
     fn write(&mut self, bytes: &[u8]);
 }
 

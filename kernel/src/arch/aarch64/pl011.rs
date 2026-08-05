@@ -68,7 +68,13 @@ impl BootConsole {
 }
 
 impl hal::Console for BootConsole {
-    /// Write every byte, blocking until the device has accepted each one.
+    /// Write bytes until the device accepts them, or until it has plainly
+    /// stopped accepting anything.
+    ///
+    /// Not "every byte, blocking until each is accepted" — that is what this said
+    /// three lines above the early return added in the same patch. A console that
+    /// never drains would otherwise hold the kernel forever, which is the failure
+    /// this whole milestone exists to remove.
     ///
     /// No initialisation of LCR_H, IBRD, FBRD or CR. QEMU's PL011 transmits
     /// without it, and on real hardware the firmware has already configured the

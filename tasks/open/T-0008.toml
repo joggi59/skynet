@@ -1,0 +1,285 @@
+[task]
+id = "T-0008"
+title = "BLOCKED — carried debts: three measured stack residuals, and what belongs to ci/, rfcs/ and governance/"
+rfc = "0002"            # The debts are RFC-0002's O-1 and O-9. Their remedy needs
+                        # the design for objective 0002's FOURTH success criterion,
+                        # which nobody has written.
+objective = "0002"
+state = "blocked"
+blocked_on = "no RFC exists for objective 0002's fourth success criterion — the MMU. A guard page is a page table entry, and there are no page tables."
+claim = "do-not-claim"
+estimated_difficulty = "unknown"
+profile = "standard"
+
+statement = """
+DO NOT CLAIM THIS. There is nothing here to implement. It is a register, and it
+is in tasks/open/ because tasks/open/ is the only directory a decomposer may
+write and there is nowhere else for it to be.
+
+It exists because of a structural observation made during review of the fault
+path, which is worth stating in full before anything else in this file:
+
+  A TASK FILE IS NOT A BACKLOG. Obligations parked in a task's prose are carried
+  forward by hand, by whoever writes the next task, or not at all. T-0005 says
+  so about itself — two of T-0004's acceptance criteria had to be re-copied into
+  it because "T-0004 is in tasks/done/ and I may not write there" — and T-0005
+  is about to move to tasks/done/ carrying its own list of things nobody owns.
+  No single contribution is the mistake, and by the time it is visible it is the
+  codebase.
+
+So this file carries them forward, with their measurements attached, and names
+the role that owns each. What it cannot do is schedule anything. It is a
+workaround for a missing structure, and [task.notes] says what should replace
+it.
+
+THE SUBJECT PROPER — three residuals on the stack, all with the same structural
+answer, none of which any ordering of sections can fix.
+
+RFC-0002 O-9 asserted that without an MMU there is no way to make a stack
+overflow land somewhere harmless. That turned out to be too strong: moving the
+vector table, the guard and the failure path out of the descent path bought
+roughly 3,200 bytes of overrun in which the machine still stops and says why,
+against roughly 1,000 before. It is a real improvement and it is not a fix. Past
+that distance three things remain true, and they are measurements rather than
+predictions.
+
+They are recorded here so that whoever writes the MMU design does not have to
+rediscover them, and so that the numbers survive the merge of the branch that
+produced them.
+"""
+
+[task.acceptance]
+# Not criteria for an implementer. These are what would DISCHARGE each debt, so
+# that a future design can be checked against them rather than argued with.
+criteria = [
+    "BLOCKED: an overrun of roughly 3,600 to 5,000 bytes below __stack_top takes exactly four exceptions and then stops dead with an empty console and exit 124. The exceptions are bounded — the ladder works — and bounding them did not buy a report, because the overrun destroyed the failure path's own code. A design discharges this when an overrun at any depth produces either a report or a fault that cannot be reached by further overrun",
+    "BLOCKED: an overrun somewhere between 5,000 and 5,600 bytes destroys vector entry 4 and storms. A design discharges this when destroying the vector table is impossible rather than merely distant",
+    "BLOCKED: a SINGLE stack frame larger than the distance from __stack_top to the vector table reaches it in one instruction, touching nothing in between. That is ordinary Rust — a 4 KiB buffer plus the frame around it clears every distance measured here — and no ordering of sections prevents it, because nothing is crossed. A design discharges this when the page below the stack is unmapped, so the frame's first write faults instead of landing",
+    "BLOCKED: every number above is a DEPTH BELOW __stack_top, not an address, and it is a property of the image that was booted. The distances are section-to-section, the sections move when the image changes, and the image changes when anything is added to it — including the instrument. Whoever picks this up re-measures rather than quoting these, and derives the floor from the __stack_top symbol at run time",
+    "BLOCKED: the instrument is part of the record, and this path has now been wrong about it twice. First: a writing loop that wrote over its own code reported the address where it died rather than the depth it was asked for, which made four sets of figures wrong by a factor of four, and was fixed by relocating the writer to 0x44100000. Second: the relocated writer still counted from a hardcoded floor read out of a previous build, and injecting a probe grows .text, which moves .stack, which moves the floor — so every depth was written from about 150 bytes off the boundary it aimed at. Eight figures were corrected one at a time across four cycles and the instrument stayed unexamined. A measurement here is honest when the writer cannot be destroyed by its own writes AND cannot move the geometry it is measuring",
+    "BLOCKED: this file is not the right artefact and should not survive. It is discharged by being deleted, once the debts below have somewhere to live that a merge cannot sweep away — see [task.notes]",
+]
+
+# ---------------------------------------------------------------------------
+# The three residuals, with their measurements. Owner: the architect, in the
+# RFC for objective 0002's fourth success criterion.
+# ---------------------------------------------------------------------------
+[task.debts.stack]
+owner = "architect — the MMU design, objective 0002 criterion 4"
+measured_on = "task/T-0005, writing loop relocated to 0x44100000, floor derived from the __stack_top symbol at run time"
+supersedes = """
+The published table said 3,264 / 3,280 / 4,800 and every one of those figures is
+false. .provenance/ledger.jsonl carries the correction as an entry of its own,
+event "correction", and the numbers below are that entry's. Do not quote the old
+ones from link.ld on the unmerged branch: they are still in the tree there, and
+the branch is pinned under review.
+"""
+layout = """
+The shipped image at the time of writing, from objdump -h:
+
+  .vectors   0x40080000    2012 bytes
+  .guard     0x400807e0       4 bytes
+  .failpath  0x400807e8      96 bytes
+  .rodata    0x40080848     740 bytes
+  .text      0x40080b30    2448 bytes
+  .bss       0x400814c0       0 bytes
+  .stack     0x400814c0   65536 bytes      __stack_top 0x400914c0
+
+Every depth below is measured DOWNWARD FROM __stack_top, in a build that
+contains the probe. It is not the same geometry as the table above, and that is
+the whole point of the correction: adding the probe grows .text, which moves
+.stack, which moves the floor.
+"""
+band = """
+THE SILENT BAND. Overrun depth below __stack_top, one binary, one writer outside
+the descent path, floor read from the symbol rather than from a constant:
+
+        4 B    full fault report
+       16 B    full fault report
+      800 B    SKYNET_REFAULT
+    3,400 B    SKYNET_REFAULT           <- the last depth that speaks
+    3,600 B    4 exceptions, silent, exit 124
+    5,000 B    4 exceptions, silent, exit 124
+    5,600 B    storm, exit 124          <- vector entry 4 destroyed
+
+The machine goes silent somewhere between 3,400 and 3,600 and stays bounded at
+four exceptions up to 5,000. In that band it takes four exceptions, prints
+nothing at all, and hangs until the timeout kills it — which is, in objective
+0002's own words in common_good, "a silent hang and a thirty-second CI timeout",
+the thing the objective exists to remove.
+
+It is bounded and it is not unsound. The ladder does its job. What is destroyed
+is the failure path's CODE, so nothing survives that can print or power off.
+"""
+storm = """
+THE STORM. Somewhere between 5,000 and 5,600 bytes the ladder cannot run at all,
+because the table it lives in has been zeroed. The mechanism is vector entry 4:
+zeroing it alone reproduces the storm with no overrun at all.
+
+Exception counts vary with the trace cap used to observe them — tens of
+thousands under a capped trace, over a million untrapped. The count is not the
+finding; the unboundedness is.
+
+The threshold has now been published as 5,300, then 4,800, and is now between
+5,000 and 5,600. Two of those three were wrong in the reassuring direction,
+which is the direction every distance on this path has been wrong in.
+"""
+single_frame = """
+THE ONE NO ORDERING FIXES. A single stack frame larger than the distance from
+__stack_top to the vector table reaches it in one instruction, without touching
+anything in between. Nothing is crossed, so nothing detects it: no guard byte is
+written, no section is clipped, no exception is raised on the way.
+
+That is ordinary Rust. A 4 KiB buffer on the stack plus the frame around it
+clears every distance measured here. FRAME_SIZE is 4 KiB, which is not a
+coincidence — the first code to hold a frame-sized object on the stack meets
+this.
+
+The only mitigation available before the MMU is not to build large frames, which
+is why T-0006 and T-0007 each carry a criterion asking for the largest stack
+object they introduce, in bytes, with 1 KiB as the line. That is a discipline,
+not a fix. The fix is an unmapped page below the stack.
+"""
+what_is_not_a_debt = """
+Stated so it is not carried forward as though it were: the residual is an
+improvement, not a regression. Before the layout work the same instrument
+measured the storm threshold at 2,288 bytes and a silent exit at roughly 1,000.
+The envelope in which the machine stops by itself and says something is several
+times wider now. A plain fault that destroys nothing produces an identical,
+complete report before and after.
+
+Those two comparison figures come from the OLD instrument and are subject to the
+same correction. The direction is safe — both trees were measured the same wrong
+way, so the ratio survives even though the absolute numbers do not — and that is
+the most that can honestly be claimed for them.
+"""
+the_method = """
+THE FINDING UNDER THE FINDING, and the one most likely to be needed again.
+
+A probe that changes the geometry it measures is the same class of defect as a
+probe that destroys its own writing loop. The second was found here and fixed by
+relocating the writer; the first survived that fix, because nobody asked what
+else the probe had moved.
+
+The remedy, from the ledger, generalises past this file: any probe in this
+repository that targets an address relative to the stack must derive it from
+__stack_top AT RUN TIME, never from a constant read out of a previous build.
+
+The wider form, which is what T-0006 and T-0007 inherit: instrumentation is
+bytes in the image, and bytes in the image move every symbol above them. If a
+measurement is a distance to a symbol, the instrument is inside the experiment.
+"""
+
+# ---------------------------------------------------------------------------
+# Debts owned by roles that have no open task to receive them. Named, not
+# smuggled: none of these may be fixed from a kernel branch or from tasks/.
+# ---------------------------------------------------------------------------
+[task.unowned.ci]
+owner = "orchestrator"
+items = [
+    "check_minting_sites measures constructor NAMES rather than device reach. A portable kernel/src/leak.rs doing write_volatile(0x0900_0000) printed on the operator's console and passed the build, clippy -D warnings, every constitution check and every boot-test assertion. RFC-0002 O-10 already prescribes the fix: look for the address, not the name. Compiled and booted during review on two trees, not argued",
+    "ci/ledger-schema.py fails OPEN. `version = entry.get(\"schema\", 0)` routes any entry without the field to V0, and the V0 branch exits 0 before the empty-field check that only V1 runs. A merge entry with empty verdict lists therefore exits 0 — the mechanical check for invariant 3 accepts a record asserting that nobody reviewed and nobody judged. Executed during review, not inferred. Suggested shape: a floor keyed to position, so entries at or beyond the index where the schema landed must declare schema >= 1",
+    "check_panel_leak applies its role-word grep and its verdict-word grep to the SAME line, so an attribution split across a wrapped comment survives. Measured: one link.ld line re-injected verbatim gives PASS while an equivalent boot.rs line gives FAIL. Scope and the collective forms were closed on main by 6bdc1fa, 950291a and 180375e; the line coupling was not",
+    "ci/boot-test.sh does not rebuild. A 30-second timeout FAIL was produced from a stale artefact on a tree git reported as clean, and a clean rebuild then passed 5/5. Evidence describing a tree other than the one under review, with nothing reporting the discrepancy",
+    "ci/build.sh --size does not rebuild either — it objcopies whatever binary is in target/. A figure two revisions old has already been submitted as though it described the tree under review",
+    "ci/boot-test.sh has no RAM option: QEMU_RAM is fixed at 128M. RFC-0003's own conformance criterion 4 asks for a boot at -m 8M and no CI path can run one, so the criterion that catches a hardcoded memory size is satisfiable only by hand",
+    "nothing measures [budget.boot_memory], which every profile declares with enforced_from = \"M1\". RFC-0003 O-6. M1 has arrived, and T-0007 is the first contribution whose boot memory depends on the machine it booted on rather than on the link, so the number can no longer be read off the image",
+]
+
+[task.unowned.rfcs]
+owner = "architect"
+items = [
+    "THE BLOCKER FOR THIS FILE: no RFC exists for objective 0002's fourth success criterion. RFC-0001 is boot, RFC-0002 is fault reporting, RFC-0003 is discovery and frames. The MMU has no design, and the guard page is a page table entry",
+    "RFC-0002 needs an amendment pass. O-9's two claims were measured false — there IS a placement remedy without an MMU, and a corrupted guard byte did NOT yield a machine that stops and says why. O-1 states the handler pushes 256 bytes against a measured 64-byte frame. O-11 says 'the fourth entry finds STOPPING' against a three-exception trace, and its residual class is narrower than what was measured: a UART that responds without draining hangs after two exceptions, and the state machine cannot bound it because no third exception is taken",
+    "RFC-0002 §2's pseudo-code still shows store-before-compare and test-non-zero, the two shapes the shipped code explicitly rejects. Its non-goals still say the entry saves registers to report them, while §2's own correction states the entry writes no stack at all. §1 specifies `.align 11` where the implementation uses a dedicated `.vectors ALIGN(2048)` output section, because .align 11 aligned the table but not the symbol VBAR_EL1 is loaded from — tried, rejected, unrecorded",
+    "RFC-0002 §5's containment paragraph is now affirmatively false rather than merely incomplete. It says the emergency path 'is reachable only with IN_FAILURE already set' and 'writes a fixed sixteen-byte string from .rodata and cannot be made to write anything else'. The string now lives in .failpath, and the path was reached with the guard at zero through two externally addressable symbols. The M4 argument that section proposes must now cover four sites, and for two of them 'the code the processor branches to' is one branch removed from true",
+    "RFC-0002's open questions are numbered O-1, O-2, O-3, O-9, O-10, O-11 — two series in one document. A citation like 'RFC-0002 O-2' is unambiguous only by luck, and will stop being so the first time it opens a fourth local question. §5 records no obligation for invariant 5 while panic.rs's own doc calls this console an outward channel and declines to print a panic message for that reason, and this path puts 160 bits of machine state on it. Line 159 ends in a dangling fragment",
+    "RFC-0003 O-1 records a dependency neither the architect nor the implementer can discharge: the kernel relies on a device tree at 0x4000_0000 and the boot contract does not promise one exists or say where. Every durable fix — link a raw Image so QEMU writes x0, pass -dtb at a known address, or add the placement to the contract — is in ci/. T-0006's first acceptance criterion measures the premise; it cannot close the gap",
+]
+
+[task.unowned.governance]
+owner = "orchestrator, or the BDFL"
+items = [
+    "governance/roles.toml grants the implementer may_write = [\"kernel/\", \"tasks/active/\"]; governance/SEPARATION_OF_POWERS.md says the implementer may not touch 'its own acceptance criteria'. Nothing states which governs — unlike CONSTITUTION.md and constitution.toml, which resolve precedence explicitly. That conflict is why one implementer wrote seven of its own acceptance criteria, and why tasks are now written by a decomposer",
+    "SEPARATION_OF_POWERS.md introduces its artefact list with 'That includes' — non-exhaustive — while the check enforcing it has a fixed scope. A rule stated as open-ended and enforced as closed is two rules",
+    "THE STRUCTURAL ONE, and the reason this file exists. Nothing turns 'owed' into 'assigned'. Three consecutive contributions recorded RFC debt in commit messages and nothing in the constitution or in governance/ creates a scheduled obligation to discharge any of it. Invariant 3 is entrenched and enforced now, and the only remedy available to a branch that falsifies a pinned design document is to name the debt and merge anyway. If nothing schedules the amendment, invariant 3 degrades into a convention that contributions apologise on their way past",
+]
+
+[task.scope]
+touches = []
+does_not_touch = [
+    "everything. This is a register, not a change. Nothing in this file authorises editing anything",
+]
+
+[task.notes]
+hints = """
+WHY THIS FILE IS IN tasks/open/, AND WHAT SHOULD REPLACE IT.
+
+A decomposer may write tasks/open/ and nothing else. The debts above belong to
+three roles, none of them the implementer's, and to a design that does not
+exist. There is no artefact in this repository for an obligation owed to a
+document nobody has written yet.
+
+What exists and does not work:
+
+  A task file. It closes and moves to tasks/done/, and its contents stop being
+  read. That is the observation this file opens with.
+
+  A comment in kernel source. link.ld currently carries the stack measurements
+  and carries them well — but a comment schedules nothing, and roughly a hundred
+  lines of provenance in a linker script has already produced two defects of its
+  own, a stale paragraph nobody noticed had expired and a reassurance nobody
+  noticed had been contradicted.
+
+  A commit message. Not indexed, not enumerable, and the branch it is on may be
+  rewritten.
+
+  .provenance/ledger.jsonl. Append-only and enumerable, which is right — and it
+  records what HAPPENED, not what is OWED, and the mechanical check that reads
+  it currently fails open.
+
+What would work, in rough order of how much it costs:
+
+  1. A `debts/` directory with one file per debt, an owning role, a measurement,
+     and a state — open or discharged. Enumerable, greppable, and it does not
+     move when a task closes. Owned by the orchestrator, because it spans ci/,
+     rfcs/ and governance/ and no forge role may write across those.
+
+  2. A ledger entry class — `debt-open` and `debt-discharged` — so that an
+     obligation is a record with the same standing as a merge, and a debt that
+     is never discharged is visible by counting rather than by reading. This is
+     the shape that fits what is already there, and it needs the schema check
+     fixed first, because a class that can be omitted is a class that will be.
+
+  3. A roadmap objective with governance milestones. Objective 0002 declares
+     governance = [], so nothing governance-shaped can be filed under it at all;
+     objective 0001's G0 is the only open governance milestone. Before objective
+     0002's M1 is declared served, either a task is cut under 0001/G0 or 0002 is
+     amended to declare a governance milestone. Neither is a contributor's act
+     and neither is a decomposer's.
+
+Until one of those exists, this file is where the numbers live. It is listed by
+`forge tasks list open`, which is the only queue this project has, and it is
+marked blocked and do-not-claim so that it is visible without being claimable.
+That is a workaround and it should be said out loud rather than left to look
+like a design.
+
+WHAT IS DELIBERATELY NOT IN HERE.
+
+  link.ld's remaining unasserted orderings — nothing asserts .failpath < .rodata,
+  .guard < .failpath or .vectors < .guard, and moving .failpath above .rodata
+  links cleanly while moving the emergency rungs 744 bytes closer to the stack.
+  That is live in the T-0005 cycle at the time of writing and is that task's to
+  close. It becomes unowned only if T-0005 merges without it, and then it
+  belongs here.
+
+  Everything RFC-0003 already records as its own open question and assigns:
+  O-2 (/reserved-memory, M9 or the first board that declares one), O-3
+  (MAX_REGIONS and MAX_RESERVED are guesses, revisited by whoever first meets
+  hardware), O-4 (frames are not zeroed; a decision at M3, not a finding at M5),
+  O-5 (the allocator's answer for a second core, with M2's concurrency model),
+  O-7 (arch/ stays untestable by cargo test; the first RFC with a real case
+  decides). Those have a home and a milestone. Repeating them here would make
+  this file a second copy of the RFC's open questions, which is how two records
+  come to disagree.
+"""

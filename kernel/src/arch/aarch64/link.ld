@@ -17,8 +17,15 @@
  * exception promptly while destroying a jump-table entry can turn a branch into
  * a loop on itself that raises nothing at all.
  *
- * Every ordering above is an ASSERT below. None of it is held by script order,
- * which anyone can reverse.
+ * Every ADJACENT pair in that chain is an ASSERT below, except one: nothing
+ * asserts that `.stack` is highest, which is this file's founding premise and is
+ * held by script order alone. An orphan section placed above it links, passes
+ * all twelve ASSERTs and every check, and inflates the image thirteenfold while
+ * the size budget reports 36% used. Carried in tasks/open/T-0008.toml. An earlier version of this sentence claimed the same
+ * thing while three pairs were held by script order alone, and a judge moved
+ * `.failpath` above `.rodata`: it linked, it booted, it passed every check, and
+ * the emergency rungs came 744 bytes closer to the stack. The sentence promising
+ * the file was checked was the part that was not.
  *
  * ─── WHAT IT BUYS, AND WHERE IT STOPS ───────────────────────────────────────
  *
@@ -103,6 +110,12 @@ SECTIONS
      * at a 256-byte stride, which the processor still indexes by 128 — so every
      * fault names the wrong slot and nothing else changes. It links, it boots,
      * the alignment check passes, the report is simply false. */
+    /* The slack is `0x800 - SIZEOF(.vectors)` for the table and
+     * `128 - (SIZEOF(.vectors) - 15 * 128)` for an entry — both computable from
+     * `objdump -h` and neither written here, because a spare-byte count in a
+     * comment is a number that goes stale while the thing it describes moves.
+     * An earlier revision stated them and they were stale within one commit.
+     * Spending the slack is a decision; say so in the message that spends it. */
     ASSERT(SIZEOF(.vectors) <= 0x800,
            "a vector entry exceeds 128 bytes: the table's stride has doubled and every fault will name the wrong slot")
 
@@ -118,6 +131,12 @@ SECTIONS
            "the failure path is not below .text: a stack overflow destroys the code that reports it, and the marker CI greps for")
     ASSERT(SIZEOF(.failpath) > 0,
            "the failure path section is empty: the emergency rungs are somewhere else")
+    ASSERT(ADDR(.vectors) < ADDR(.guard),
+           "the vector table is not below the guard: the ordering these ASSERTs exist to hold has been reversed")
+    ASSERT(ADDR(.guard) < ADDR(.failpath),
+           "the guard is not below the failure path: the ordering these ASSERTs exist to hold has been reversed")
+    ASSERT(ADDR(.failpath) < ADDR(.rodata),
+           "the failure path is not below .rodata: it moves closer to the stack, which is the one thing this layout exists to prevent")
     ASSERT(SIZEOF(.guard) >= 4,
            "the re-entrancy guard section is empty or too small: nothing is holding the flag")
 

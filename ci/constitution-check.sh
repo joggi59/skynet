@@ -91,6 +91,81 @@ check_hal_boundary() {
 }
 
 # ---------------------------------------------------------------------------
+# Invariant 6, second half — reach by name
+#
+# RFC-0002 O-12. check_hal_boundary above greps for seven spellings of "this
+# code is architecture-specific": core::arch::, asm!, naked_asm!, global_asm!
+# and three more. A `#[link_name]` extern contains none of them, so a portable
+# file can bind any symbol in the image and call it, and that check stays
+# green. Measured on three separate images built for the purpose, plus a
+# fourth reaching the vector table on main: each printed to the PL011 or
+# powered the machine off, from a file with no asm, no core::arch, no
+# target_arch, no cfg and no constructor. hal-boundary passed all four.
+#
+# That is O-10 one check over — a check standing in for a fact about ADDRESSES
+# by matching TEXT — which is what makes it a class rather than a gap.
+#
+# The remedy RFC-0002 asks for is an intersection: the symbols a portable
+# translation unit references, against the symbols defined in arch/. THAT IS
+# NOT WHAT THIS CHECKS, and the difference is worth stating rather than
+# blurring. Rust compiles this crate as one translation unit — the profile
+# pins `lto = true` and `codegen-units = 1`, and `--emit=obj` yields a single
+# object even at `-C codegen-units=16` — so there is no portable object file
+# to take undefined symbols from. Measured, not assumed.
+#
+# What is checkable is the mechanism instead of the intent, and it happens to
+# be closed rather than a list: binding a name at link time from safe portable
+# Rust requires an `extern` block. There is no second spelling. So the rule is
+# that a portable file declares none — which is the state of the tree today,
+# on main and on the branch, in all three portable files, and which every one
+# of the four demonstrated reach-arounds had to break to work.
+#
+# WHAT THIS DOES NOT CATCH, stated because an unstated limit is how the check
+# above came to be trusted for something it never did: a raw address cast.
+# Nothing stops portable code writing `(0x4008_0000 as *const fn())`, and
+# nothing here would see it. That is not a symbol reach and closing it needs
+# capabilities, which is M4. This bounds the named route only.
+check_reach_around() {
+    heading "Invariant 6 — reach by name"
+    if ! kernel_exists; then
+        pending "no kernel yet; enforced from M0"
+        return
+    fi
+
+    local hal_dir portable hits=0
+    hal_dir=$(toml_get "$CONST" "[i for i in d['invariant'] if i['id']=='hal_boundary'][0]['hal_dir']")
+    portable=$(find kernel/src -name '*.rs' -not -path "$hal_dir/*" | sort)
+    if [ -z "$portable" ]; then
+        fail "no portable kernel sources found outside $hal_dir — the check cannot have passed"
+        return
+    fi
+
+    local f decls
+    while IFS= read -r f; do
+        [ -z "$f" ] && continue
+        # Declarations only. A comment line mentioning one is a mention, and
+        # the exclusion is anchored after grep's `path:lineno:` prefix — the
+        # same mistake the check above documents having made.
+        decls=$(grep -nE '^[[:space:]]*(unsafe[[:space:]]+)?extern[[:space:]]+"' "$f" \
+                | grep -vE '^[0-9]+:[[:space:]]*(//|\*|/\*)' || true)
+        if [ -n "$decls" ]; then
+            fail "$f declares an extern block — a portable file must bind no symbol by name"
+            # Every line. No ceiling: the exemption list in this file printed
+            # three of four once, and a truncated violation list is worse.
+            while IFS= read -r d; do detail "$f:$d"; done <<< "$decls"
+            hits=$((hits+1))
+        fi
+    done <<< "$portable"
+
+    if [ "$hits" -eq 0 ]; then
+        pass "no portable kernel file binds a symbol by name ($(echo "$portable" | grep -c .) file(s) checked)"
+        detail "bounds the named route only — a raw address cast is not visible here, and needs M4"
+    else
+        detail "RFC-0002 section 5: the design bounds effect, not reach. Do not add a second route"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Invariant 7 — no kernel dependencies
 # ---------------------------------------------------------------------------
 check_no_kernel_deps() {
@@ -684,6 +759,7 @@ run_all() {
     check_kernel_provenance
     check_panel_leak
     check_hal_boundary
+    check_reach_around
     check_no_kernel_deps
     check_english
     check_pending_invariant "no_ambient_authority" 1 "M4" \
@@ -709,6 +785,7 @@ main() {
                 prose-sync)      check_prose_sync ;;
                 provenance)      check_provenance ;;
                 hal-boundary)    check_hal_boundary ;;
+                reach-around)    check_reach_around ;;
                 no-kernel-deps)  check_no_kernel_deps ;;
                 english)         check_english ;;
                 vector-alignment) check_vector_alignment ;;

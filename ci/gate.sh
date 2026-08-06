@@ -191,7 +191,14 @@ print(sum(1 for x in d.get('findings',[]) if x.get('severity')=='blocking'))" 2>
             approve) approve=$((approve+1)); info "$r: approve" ;;
             reject)  reject=$((reject+1));   info "$r: REJECT" ;;
             abstain) abstain=$((abstain+1)); info "$r: abstain" ;;
-            *)       fail "$r returned an unknown verdict '$v'"; missing=$((missing+1)) ;;
+            # Counted with the missing, which is the fail-closed direction: an
+            # unreadable verdict is not a vote. Measured once — a reviewer wrote
+            # 'refuse' where forge/prompts/README.md says approve/reject/abstain,
+            # and the word is echoed here now so the next reader sees what was
+            # written rather than only that something was.
+            *)       fail "$r returned an unknown verdict '$v' — expected approve, reject or abstain"
+                     detail "counted as missing; an unreadable verdict is not a vote"
+                     missing=$((missing+1)) ;;
         esac
         if [ "${b:-0}" -gt 0 ]; then
             blocking=$((blocking+b))

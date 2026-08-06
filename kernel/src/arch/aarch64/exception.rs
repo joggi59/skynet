@@ -195,7 +195,7 @@ const _: () = assert!(
 #[unsafe(link_section = ".failpath")]
 static REFAULT_MARKER: [u8; 16] = *b"SKYNET_REFAULT\r\n";
 
-/// The vector table.
+/// The vector table, and the two emergency rungs it branches to.
 ///
 /// Sixteen entries of 128 bytes, 2 KiB aligned. Both are architectural
 /// requirements: `VBAR_EL1`'s low eleven bits are RES0, so a misaligned write
@@ -221,6 +221,10 @@ static REFAULT_MARKER: [u8; 16] = *b"SKYNET_REFAULT\r\n";
 ///
 /// 128 bytes is a hard limit the assembler will not warn about: overflow one and
 /// the next entry starts in the middle of your code. `link.ld` asserts it.
+///
+/// The two shared rungs are emitted from the bottom of this same block, into
+/// `.failpath`, as numbered assembler labels. They are not functions and have no
+/// names; see the comment above them for why.
 ///
 #[unsafe(naked)]
 #[unsafe(link_section = ".vectors")]
@@ -279,7 +283,7 @@ pub(super) unsafe extern "C" fn vector_table() -> ! {
         "   cmp  w1, w3",
         "   b.ne 2f",
         "   str  w2, [x0]",
-        "   b    {quiet}",
+        "   b    30f",
 
         // Rung two: the report faulted. Advance to STOPPING, print the marker.
         "2: movz w2, #{failing_lo}",
@@ -287,7 +291,7 @@ pub(super) unsafe extern "C" fn vector_table() -> ! {
         "   cmp  w1, w2",
         "   b.ne 3f",
         "   str  w3, [x0]",
-        "   b    {emergency}",
+        "   b    40f",
 
         // Rung one: not failing. Claim it and take the full report path.
         "3: str  w2, [x0]",
@@ -315,39 +319,65 @@ pub(super) unsafe extern "C" fn vector_table() -> ! {
         ".align 7", "ENTRY 14",
         ".align 7", "ENTRY 15",
 
-        handler     = sym exception_entry,
-        emergency   = sym emergency_report,
-        quiet       = sym quiet_stop,
-        guard       = sym super::fail::IN_FAILURE,
-        failing_lo  = const (super::fail::FAILING & 0xffff),
-        failing_hi  = const (super::fail::FAILING >> 16),
-        stopping_lo = const (super::fail::STOPPING & 0xffff),
-        stopping_hi = const (super::fail::STOPPING >> 16),
-        silent_lo   = const (super::fail::SILENT & 0xffff),
-        silent_hi   = const (super::fail::SILENT >> 16),
-    )
-}
+        // ─── THE TWO SHARED RUNGS, WITH NO NAME TO CALL THEM BY ──────────────
+        //
+        // Emitted from inside this block, into `.failpath`, where the layout
+        // wants them: below `.text`, above the guard, reached by the branches
+        // above and by nothing else.
+        //
+        // They were two `#[unsafe(naked)] extern "C" fn`s until review reached
+        // both of them from a PORTABLE module with `#[link_name]` — no `asm!`,
+        // no `core::arch`, no `#[cfg(target_arch)]`, no register name, nothing
+        // `ci/constitution-check.sh --check hal-boundary` greps for. Reproduced:
+        // `kernel_main` calling the marker rung printed SKYNET_BOOT_OK and then
+        // SKYNET_REFAULT and powered the machine off, on a boot where no fault
+        // had occurred. The rungs assume the ladder advanced them; a caller that
+        // never touched the ladder gets a machine that reports a fault that did
+        // not happen, or shuts down mid-boot.
+        //
+        // A function is a symbol, and a symbol is an entry point for anything
+        // that can spell its name. Making them `unsafe`, private, `#[doc(hidden)]`
+        // or unmangled changes nothing: `#[link_name]` binds to whatever the
+        // symbol table holds, and lowering the linkage to local does not help
+        // either — this crate is one LTO module and both were already local `t`.
+        //
+        // So there is no symbol. `.pushsection` places the bodies and numbered
+        // local labels name them; assembler-local labels produce no symbol table
+        // entry, so the reach-around is an undefined-symbol error at link time
+        // rather than a working call. Both halves measured: `nm` on the linked
+        // ELF shows nothing at either address, and the reach-around that worked
+        // one commit ago now stops the build with
+        // `ld.lld: error: undefined symbol`.
+        //
+        // This costs the two bodies their doc comments and their `# Safety`
+        // sections, which is a real loss and the reason the equivalent prose is
+        // here instead. It buys the one property those comments could only ask
+        // for politely.
+        ".pushsection .failpath, \"ax\"",
+        ".p2align 2",
 
-/// Rung two: the report faulted. Print a fixed marker, then stop the machine.
-///
-/// No stack, no `BootConsole`, no constructor. The address is formed with one
-/// `movz`, the string is read out of this function's own body, and the poll on
-/// TXFF is BOUNDED — see [`BootConsole::POLL_BUDGET`](super::pl011::BootConsole).
-///
-/// # Safety
-/// Reached by a branch from a vector entry, which has already advanced the
-/// ladder to `STOPPING`. Takes nothing and writes no memory but the UART.
-///
-/// Not "uncallable from Rust" — an earlier version of this comment said that
-/// of these three functions, having just withdrawn the identical claim about
-/// two others forty lines away. `#[link_name]` reaches any symbol.
-#[unsafe(naked)]
-#[unsafe(link_section = ".failpath")]
-unsafe extern "C" fn emergency_report() -> ! {
-    naked_asm!(
-        "  movz x1, #{uart_hi}, lsl #16",
-        "  adr  x3, {marker}",
-        "  movz w7, #{marker_len}",
+        // Rung three: stop the machine without touching a device.
+        //
+        // Reached from a vector entry, which advanced the ladder to SILENT
+        // before branching here, or from rung two below once the marker is out.
+        // Takes nothing, advances nothing, stores nothing.
+        "30: movz x0, #{psci_off_lo}",
+        "    movk x0, #{psci_off_hi}, lsl #16",
+        "    hvc  #0",
+        // PSCI SYSTEM_OFF does not return. If it ever does, stop here rather
+        // than branch anywhere — there is nothing left that can be trusted.
+        "31: wfi",
+        "    b    31b",
+
+        // Rung two: the report faulted. Print a fixed marker, then stop.
+        //
+        // No stack, no `BootConsole`, no constructor. The address is formed with
+        // a single `movz … lsl #16`, the string is `REFAULT_MARKER` sitting in
+        // this same section, and the poll on TXFF is BOUNDED — see
+        // `BootConsole::POLL_BUDGET`.
+        "40: movz x1, #{uart_hi}, lsl #16",
+        "    adr  x3, {marker}",
+        "    movz w7, #{marker_len}",
         // The per-byte budget. A UART that answers and never drains is not
         // bounded by any state machine: no exception is ever taken, so nothing
         // can intervene. Review pointed QEMU virt's PCIe MMIO window at this
@@ -355,23 +385,32 @@ unsafe extern "C" fn emergency_report() -> ! {
         // two exceptions on the clock and nothing on the console. A byte that
         // will not go is dropped, and the marker comes out short rather than
         // never.
-        "20: ldrb w4, [x3], #1",
+        "41: ldrb w4, [x3], #1",
         "    movz w5, #{poll_lo}",
         "    movk w5, #{poll_hi}, lsl #16",
-        "21: ldr  w6, [x1, #{fr_off}]",
-        "    tbz  w6, #{txff_bit}, 23f",
+        "42: ldr  w6, [x1, #{fr_off}]",
+        "    tbz  w6, #{txff_bit}, 43f",
         "    subs w5, w5, #1",
-        "    b.ne 21b",
+        "    b.ne 42b",
         // Budget spent on this byte. Drop it and count it — an earlier version
         // branched back to the load without counting, so a FIFO that stayed full
         // walked the pointer forever and the length bound bought nothing.
-        "    b    24f",
-        "23: str  w4, [x1, #{dr_off}]",
-        "24: subs w7, w7, #1",
-        "    b.ne 20b",
-        "    b    {quiet}",
+        "    b    44f",
+        "43: str  w4, [x1, #{dr_off}]",
+        "44: subs w7, w7, #1",
+        "    b.ne 41b",
+        "    b    30b",
 
-        quiet       = sym quiet_stop,
+        ".popsection",
+
+        handler     = sym exception_entry,
+        guard       = sym super::fail::IN_FAILURE,
+        failing_lo  = const (super::fail::FAILING & 0xffff),
+        failing_hi  = const (super::fail::FAILING >> 16),
+        stopping_lo = const (super::fail::STOPPING & 0xffff),
+        stopping_hi = const (super::fail::STOPPING >> 16),
+        silent_lo   = const (super::fail::SILENT & 0xffff),
+        silent_hi   = const (super::fail::SILENT >> 16),
         marker      = sym REFAULT_MARKER,
         marker_len  = const REFAULT_MARKER.len(),
         uart_hi     = const (super::platform::UART0_BASE >> 16),
@@ -380,31 +419,7 @@ unsafe extern "C" fn emergency_report() -> ! {
         txff_bit    = const super::pl011::BootConsole::FR_TXFF.trailing_zeros(),
         poll_lo     = const (super::pl011::BootConsole::POLL_BUDGET & 0xffff),
         poll_hi     = const (super::pl011::BootConsole::POLL_BUDGET >> 16),
+        psci_off_lo = const (super::psci::PSCI_SYSTEM_OFF & 0xffff),
+        psci_off_hi = const ((super::psci::PSCI_SYSTEM_OFF >> 16) & 0xffff),
     )
 }
-
-/// Rung three: stop the machine without touching a device.
-///
-/// Reached from a vector entry, which advanced the ladder before branching here,
-/// or from `emergency_report`. Takes nothing, advances nothing, stores nothing.
-///
-/// # Safety
-/// Never returns. Not "uncallable from Rust" — `#[link_name]` reaches any symbol,
-/// and an earlier version of this comment claimed otherwise while a paragraph
-/// five lines below said the opposite.
-#[unsafe(naked)]
-#[unsafe(link_section = ".failpath")]
-unsafe extern "C" fn quiet_stop() -> ! {
-    naked_asm!(
-        "  movz x0, #{psci_off_lo}",
-        "  movk x0, #{psci_off_hi}, lsl #16",
-        "  hvc  #0",
-        // PSCI SYSTEM_OFF does not return. If it ever does, stop here rather
-        // than branch anywhere — there is nothing left that can be trusted.
-        "1: wfi",
-        "   b    1b",
-        psci_off_lo  = const (super::psci::PSCI_SYSTEM_OFF & 0xffff),
-        psci_off_hi  = const ((super::psci::PSCI_SYSTEM_OFF >> 16) & 0xffff),
-    )
-}
-

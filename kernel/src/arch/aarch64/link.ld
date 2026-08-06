@@ -28,12 +28,16 @@
  * ─── WHAT IT BUYS, AND WHERE IT STOPS ───────────────────────────────────────
  *
  * Three distances decide what a stack overflow costs. They are SUBTRACTIONS on
- * the section table — `objdump -h` and `nm` give them, and they are not quoted
- * here because a number in a comment goes stale and a derivation does not:
+ * the section table — `objdump -h`, `objdump -d` and `nm` give them, and they
+ * are not quoted here because a number in a comment goes stale and a derivation
+ * does not:
  *
  *     __stack_top - STACK_SIZE  minus  the last word of .text
  *         past this, no full fault report: that word is `bl fault_stop`
- *     ... minus the address of `quiet_stop`'s `hvc`
+ *     ... minus the address of the `hvc` in the quiet rung. `nm` does NOT give
+ *         this one and is not meant to: the rung is an assembler label inside
+ *         `.failpath` carrying no symbol, so that no name reaches it from
+ *         anywhere. `objdump -d --section=.failpath` gives the address.
  *         past this, the machine cannot power itself off: bounded, silent, 124
  *     ... minus the address of vector entry 4
  *         past this, the processor branches into rubbish and storms

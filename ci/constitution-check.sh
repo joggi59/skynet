@@ -226,35 +226,79 @@ check_no_kernel_deps() {
         return
     fi
 
+    # Three fail-opens lived in the ten lines this replaces, and the host test
+    # harness added by the library split is exactly what made them reachable.
+    #
+    # 1. The scan named three tables — dependencies, build-dependencies,
+    #    dev-dependencies. A `[target."cfg(test)".dev-dependencies]` is in none
+    #    of them and was invisible. Now every table whose name ends in
+    #    `dependencies`, at any depth, is collected.
+    # 2. `2>/dev/null` on the interpreter. An unparseable manifest, a missing
+    #    tomllib, any error at all, produced an empty list and a PASS. This is
+    #    the SAME defect this file already records having made in the mention
+    #    stripper, where it turned two real failures into a silent pass.
+    # 3. `if [ -f kernel/Cargo.lock ]` guarded the strongest evidence there is.
+    #    Delete the lock and a kernel with dependencies PASSes. An absence read
+    #    as compliance, which is the defect named three times in this file.
+    #
+    # None of the three was found by a check. The third was found by a role
+    # reading the branch that made it reachable.
     local deps
-    deps=$(python3 -c "
-import tomllib
-d = tomllib.load(open('kernel/Cargo.toml','rb'))
-names = []
-for section in ('dependencies','build-dependencies','dev-dependencies'):
-    names += list(d.get(section,{}).keys())
-print(' '.join(names))
-" 2>/dev/null)
+    if ! deps=$(python3 - <<'PY'
+import sys, tomllib
+
+try:
+    d = tomllib.load(open("kernel/Cargo.toml", "rb"))
+except Exception as exc:  # noqa: BLE001 — the reason is the whole output
+    sys.exit(f"cannot read kernel/Cargo.toml: {exc}")
+
+# Any table whose name ends in `dependencies`, however deeply nested. Cargo
+# permits them under [target.<cfg>.…] and under [workspace.…]; enumerating a
+# fixed list of three was how one of them hid.
+found = []
+def walk(node, path):
+    if not isinstance(node, dict):
+        return
+    for key, value in node.items():
+        here = f"{path}.{key}" if path else key
+        if key.endswith("dependencies") and isinstance(value, dict):
+            found.extend(f"{name} (in [{here}])" for name in value)
+        else:
+            walk(value, here)
+walk(d, "")
+print("\n".join(found))
+PY
+    ); then
+        fail "the dependency scan could not run"
+        detail "$deps"
+        detail "a scan that cannot run is not a scan that found nothing"
+        return
+    fi
 
     if [ -n "$deps" ]; then
-        fail "kernel declares dependencies: $deps"
+        fail "kernel declares dependencies:"
+        while IFS= read -r dep; do [ -n "$dep" ] && detail "$dep"; done <<< "$deps"
         detail "invariant 7 requires an empty tree — write it instead"
         return
     fi
 
-    # Cargo.lock is the real evidence: a manifest can be clean while the lock
-    # is not, if the workspace pulled something in.
-    if [ -f kernel/Cargo.lock ]; then
-        local n
-        n=$(grep -c '^\[\[package\]\]' kernel/Cargo.lock || true)
-        if [ "$n" -gt 1 ]; then
-            fail "kernel/Cargo.lock resolves $n packages; exactly 1 (the kernel) is permitted"
-            grep -A1 '^\[\[package\]\]' kernel/Cargo.lock | grep '^name' | while read -r l; do detail "$l"; done
-            return
-        fi
+    # Cargo.lock is the real evidence: a manifest can be clean while the lock is
+    # not. Its ABSENCE is therefore a failure and not a reason to skip — the
+    # previous version treated a missing lock as nothing to check.
+    if [ ! -f kernel/Cargo.lock ]; then
+        fail "kernel/Cargo.lock is missing — the manifest alone cannot show the tree is empty"
+        detail "build the kernel to produce it; do not delete it to satisfy this check"
+        return
+    fi
+    local n
+    n=$(grep -c '^\[\[package\]\]' kernel/Cargo.lock || true)
+    if [ "$n" -ne 1 ]; then
+        fail "kernel/Cargo.lock resolves $n packages; exactly 1 (the kernel) is permitted"
+        grep -A1 '^\[\[package\]\]' kernel/Cargo.lock | grep '^name' | while read -r l; do detail "$l"; done
+        return
     fi
 
-    pass "kernel dependency tree is empty"
+    pass "kernel dependency tree is empty (manifest scanned at every depth, lock resolves 1)"
 }
 
 # ---------------------------------------------------------------------------

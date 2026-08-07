@@ -40,12 +40,19 @@
 //!
 //! `overflow-checks = true` is on in release. An unchecked add on a malformed
 //! header would therefore panic, and a panic is the marker that means the kernel
-//! has a bug — which is the wrong thing to say about a bad blob. So: every value
-//! this file reads out of the blob is a `u32` widened to `u64` before it is used
-//! in arithmetic, which makes any sum of two of them unrepresentable-overflow-
-//! free by construction, and every remaining addition is `checked_add`. Slice
-//! offsets are computed in `u64` and narrowed to `usize` only after the bound
-//! against the slice has been proved.
+//! has a bug — which is the wrong thing to say about a bad blob. So: nearly
+//! every value this file reads out of the blob is a `u32` widened to `u64`
+//! before it is used in arithmetic, which makes any sum of two of them
+//! unrepresentable-overflow-free by construction, and every remaining addition
+//! is `checked_add`. Slice offsets are computed in `u64` and narrowed to
+//! `usize` only after the bound against the slice has been proved.
+//!
+//! Two values are the exception and are full-width `u64`s with nothing above
+//! them: a memory reservation entry's address and size, and the address and
+//! size of a `reg` entry at two address cells and two size cells. Their sums
+//! are the only ones here that a blob can make unrepresentable, they are
+//! `checked_add` and a typed error, and [`crate::hal::Region`] records why the
+//! check is at this door rather than in the type.
 
 use crate::hal::{MemoryMap, Region};
 
@@ -156,6 +163,8 @@ pub enum Error {
     ReservationsUnterminated,
     /// More reservation entries than [`crate::hal::MAX_RESERVED`].
     TooManyReservations,
+    /// A reservation entry's `address + size` is not representable in 64 bits.
+    ReservationEndOverflows,
     /// A node name, property header or property body runs past the structure
     /// block.
     StructTruncated,
@@ -186,6 +195,13 @@ pub enum Error {
     MalformedReg,
     /// More memory regions than [`crate::hal::MAX_REGIONS`].
     TooManyRegions,
+    /// A `reg` entry's address + size is not representable in 64 bits.
+    ///
+    /// Separate from [`Error::ReservationEndOverflows`] for the reason the rest
+    /// of this enum is split the way it is: the console prints one fixed string
+    /// and "a reservation entry" and "a memory node's reg" send whoever reads it
+    /// to two different places in the tree.
+    RegionEndOverflows,
 }
 
 /// Turn the bytes of a flattened device tree into a [`MemoryMap`].
@@ -410,6 +426,15 @@ fn read_reservations(blob: &[u8], header: &Header, map: &mut MemoryMap) -> Resul
         if len == 0 {
             continue;
         }
+        // Both halves are a full `u64` straight out of the blob, so unlike
+        // everything else in this file the sum is not overflow-free by
+        // construction. Rejected here rather than carried: `Region` states why
+        // the bound is the parser's and not the type's, and an entry whose end
+        // is unrepresentable would otherwise panic in whichever consumer added
+        // the two together first, with the blob long out of scope.
+        if base.checked_add(len).is_none() {
+            return Err(Error::ReservationEndOverflows);
+        }
         map.push_reserved(Region { base, len })
             .map_err(|_| Error::TooManyReservations)?;
     }
@@ -509,16 +534,22 @@ impl Walk {
 
                     // Bound the body against the structure block, not merely
                     // against the slice: a `len` that reaches into the strings
-                    // block is malformed even though the bytes exist.
+                    // block is malformed even though the bytes exist, and the
+                    // slice may be longer than the tree, so `slice_at` alone
+                    // would let a body read past `totalsize` — which this
+                    // module's opening claim says never happens.
                     //
-                    // This bound and the one after the padding below are
-                    // redundant — removing either alone leaves the other
-                    // rejecting the same blobs with the same error, which a
-                    // mutation run confirmed. Both are kept because they are not
-                    // redundant in what they permit in between: without this
-                    // one, `body` would be handed to `take_property` containing
-                    // strings-block bytes, and a later reader who moves the
-                    // padding check would inherit that quietly.
+                    // This bound and the one after the padding below are not
+                    // redundant, and an earlier revision of this comment said
+                    // they were on the strength of a mutation run in which both
+                    // mutants survived. Surviving a suite is not equivalence.
+                    // Deleting this one turns a 40-byte overrun into whatever
+                    // the reader downstream makes of the strings-block bytes it
+                    // is then handed — `NameOffsetOutOfBounds` for a bad
+                    // `nameoff`, `MalformedCellCount` for the same overrun on
+                    // `#address-cells`. Deleting the other lets a body that
+                    // ends one byte inside the block pad its way out of it.
+                    // Each has a test below, named for the bound it pins.
                     let body_end = off + len; // widened `u32`s, cannot overflow
                     if body_end > end {
                         return Err(Error::StructTruncated);
@@ -649,6 +680,14 @@ impl Walk {
             let base = read_cells(blob, at, address_cells)?;
             let size = read_cells(blob, at + address_cells * CELL_LEN, size_cells)?;
             at += entry_len;
+            // The other door the same unrepresentable region comes through, and
+            // it only exists at two address cells and two size cells: at one
+            // cell each both values are widened `u32`s and the sum cannot
+            // overflow. Checked regardless of the widths, because that argument
+            // is about the blob in hand and not about the code.
+            if base.checked_add(size).is_none() {
+                return Err(Error::RegionEndOverflows);
+            }
             self.map
                 .push_region(Region { base, len: size })
                 .map_err(|_| Error::TooManyRegions)?;
@@ -1307,6 +1346,87 @@ mod tests {
     }
 
     #[test]
+    fn the_body_bound_is_checked_before_the_name_and_before_the_value() {
+        // Pins the body bound specifically, which the padding bound below
+        // cannot stand in for. Both blobs here declare a 40-byte body on a
+        // property whose body has room for four, so both overrun the structure
+        // block — and both keep the overrun inside the slice, so `slice_at`
+        // hands the body over rather than refusing it. A parser that bounded
+        // the body only after reading it would still reject these, but with the
+        // wrong diagnosis and only after a reader had already been given
+        // strings-block bytes:
+        //
+        //   a nameoff past the strings block -> NameOffsetOutOfBounds
+        //   the same overrun on #address-cells -> MalformedCellCount
+        //
+        // Both were confirmed against a build with the bound deleted.
+        let mut bad_name = Builder::new();
+        bad_name.begin_node("");
+        bad_name.intern(PADDING_NAME);
+        let past = bad_name.strings.len() as u32;
+        bad_name.prop_raw(40, past, &[0u8; 4]);
+        let blob = bad_name.build();
+        check_the_fixture_overruns_the_block_but_not_the_slice(&blob);
+        assert_eq!(err(&blob), Error::StructTruncated);
+
+        let mut bad_value = Builder::new();
+        bad_value.begin_node("");
+        let cells = bad_value.intern("#address-cells");
+        bad_value.intern(PADDING_NAME);
+        bad_value.prop_raw(40, cells, &[0u8; 4]);
+        let blob = bad_value.build();
+        check_the_fixture_overruns_the_block_but_not_the_slice(&blob);
+        assert_eq!(err(&blob), Error::StructTruncated);
+    }
+
+    /// A property name long enough that the strings block outruns a 40-byte
+    /// overrun of the structure block, so the overrun lands on bytes that exist.
+    const PADDING_NAME: &str = "a-name-long-enough-that-the-strings-block-outruns-the-overrun";
+
+    /// Assert that the 40-byte body of the sole property in either fixture above
+    /// ends past the structure block and still inside the blob. Both halves are
+    /// the point: an overrun the slice bound catches anyway would say nothing
+    /// about the structure-block bound.
+    fn check_the_fixture_overruns_the_block_but_not_the_slice(blob: &[u8]) {
+        // FDT_BEGIN_NODE and the root's empty name fill the first 8 bytes of
+        // the structure block, the FDT_PROP header the next 12.
+        let off_dt_struct = u64::from(field(blob, 2));
+        let body_end = off_dt_struct + 8 + 12 + 40;
+        let struct_end = off_dt_struct + u64::from(field(blob, 9));
+        assert!(
+            body_end > struct_end,
+            "body ends at {body_end}, structure block at {struct_end} — no overrun"
+        );
+        assert!(
+            body_end <= blob.len() as u64,
+            "body ends at {body_end}, slice is {} — the slice bound would catch it",
+            blob.len()
+        );
+    }
+
+    #[test]
+    fn a_property_body_whose_padding_leaves_the_structure_block() {
+        // The other half of the pair, and the case the body bound cannot catch:
+        // the body itself ends one byte inside the block, and only the pad to
+        // the next 4-byte boundary crosses out of it. That needs a
+        // `size_dt_struct` which is not a multiple of four — legal in the
+        // header, and nothing else in this file rejects it — so the value is
+        // patched in rather than built.
+        //
+        // Structure block, from `off_dt_struct`: FDT_BEGIN_NODE and the root's
+        // empty name fill 0..8, the FDT_PROP header 8..20, and a 5-byte body
+        // 20..25. With the block declared 26 bytes long the body ends at
+        // `end - 1` and its padding lands at 28, three bytes past it.
+        let mut b = Builder::new();
+        b.begin_node("");
+        let nameoff = b.intern("reg");
+        b.prop_raw(5, nameoff, &[0u8; 5]);
+        let mut blob = b.build();
+        set_field(&mut blob, 9, 26);
+        assert_eq!(err(&blob), Error::StructTruncated);
+    }
+
+    #[test]
     fn an_unterminated_node() {
         let mut b = Builder::new();
         b.begin_node("");
@@ -1489,6 +1609,70 @@ mod tests {
     }
 
     #[test]
+    fn a_reg_entry_whose_end_is_not_representable() {
+        // Two address cells and two size cells, which is the only width at
+        // which a `reg` entry can name this at all.
+        let mut b = Builder::new();
+        b.begin_node("");
+        b.prop_u32("#address-cells", 2);
+        b.prop_u32("#size-cells", 2);
+        b.begin_node("memory@0");
+        b.prop("device_type", b"memory\0");
+        b.prop("reg", &reg_body(2, 2, u64::MAX, u64::MAX));
+        b.end_node();
+        b.end_node();
+        b.end();
+        assert_eq!(err(&b.build()), Error::RegionEndOverflows);
+    }
+
+    #[test]
+    fn a_reg_entry_ending_exactly_at_the_top_of_the_address_space_is_accepted() {
+        // The bound is "not representable", not "large". One byte lower and the
+        // sum fits, which is what makes the test above about the sum rather than
+        // about `u64::MAX` appearing anywhere.
+        let mut b = Builder::new();
+        b.begin_node("");
+        b.prop_u32("#address-cells", 2);
+        b.prop_u32("#size-cells", 2);
+        b.begin_node("memory@1");
+        b.prop("device_type", b"memory\0");
+        b.prop("reg", &reg_body(2, 2, 1, u64::MAX - 1));
+        b.end_node();
+        b.end_node();
+        b.end();
+        assert_eq!(
+            parse(&b.build()).unwrap().regions(),
+            &[Region {
+                base: 1,
+                len: u64::MAX - 1
+            }]
+        );
+    }
+
+    #[test]
+    fn a_reservation_whose_end_is_not_representable() {
+        // The reservation block is two bare `u64`s and needs no cell widths, so
+        // this is the shorter of the two paths to the same unrepresentable
+        // region — and the one where nothing about the encoding bounds it.
+        let mut b = minimal(1, 1);
+        b.reserve(u64::MAX, u64::MAX);
+        assert_eq!(err(&b.build()), Error::ReservationEndOverflows);
+    }
+
+    #[test]
+    fn a_reservation_ending_exactly_at_the_top_of_the_address_space_is_accepted() {
+        let mut b = minimal(1, 1);
+        b.reserve(1, u64::MAX - 1);
+        assert_eq!(
+            parse(&b.build()).unwrap().reserved(),
+            &[Region {
+                base: 1,
+                len: u64::MAX - 1
+            }]
+        );
+    }
+
+    #[test]
     fn more_reservations_than_the_map_holds() {
         let mut over = minimal(1, 1);
         for i in 0..MAX_RESERVED + 1 {
@@ -1509,11 +1693,20 @@ mod tests {
     // -----------------------------------------------------------------------
     // No input reaches a panic
     //
-    // `#[should_panic]` is unusable here — `[profile.dev]` sets
-    // `panic = "abort"`, so a panic takes the whole runner down. That is what
-    // makes these sweeps meaningful rather than decorative: any index this
-    // parser failed to bound shows up as an aborted test run, not as a quiet
-    // pass.
+    // What makes these sweeps load-bearing rather than decorative is that the
+    // test profile traps the same arithmetic the release profile does. Measured
+    // on cargo 1.97.1, by compiling a test that adds one to `u64::MAX`: it
+    // failed with "attempt to add with overflow", so `overflow-checks` is on
+    // here as well as in `[profile.release]`, and an index or a sum this parser
+    // failed to bound is a failing test rather than a quiet pass.
+    //
+    // An earlier revision of this comment credited `[profile.dev]`'s
+    // `panic = "abort"` instead, on the theory that a panic takes the whole
+    // runner down. That is false and the same probe disproved it: cargo does
+    // not apply `panic = "abort"` to the test profile, the harness unwinds, and
+    // the sibling tests in that run all completed and were reported one by one.
+    // The conclusion was right for the wrong reason, which is worth exactly as
+    // much as being wrong until someone rests something else on it.
     // -----------------------------------------------------------------------
 
     #[test]

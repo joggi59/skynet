@@ -108,6 +108,27 @@ pub const MAX_RESERVED: usize = 16;
 /// `u64` and not `usize`. A 32-bit port with a wider physical address space is
 /// a real machine, and `usize` there is a silent truncation of an address the
 /// hardware can reach.
+///
+/// # Where `base + len` is bounded, and why not here
+///
+/// This type does not enforce that `base + len` is representable. It could:
+/// private fields, a fallible constructor and two accessors would make the
+/// state unbuildable rather than merely rejected. That was weighed and not
+/// taken, for two reasons. The shape RFC-0003 section 2 gives is a pair of
+/// public `u64`s, and its one consumer — the frame allocator — reads both of
+/// them off every entry of two slices; putting a fallible constructor in front
+/// of a type nobody but the parser builds moves the check without removing it,
+/// and pays for the move in interface. And the values that can overflow all
+/// arrive from one place: a device tree blob, which is the only untrusted
+/// input in this kernel that becomes a `Region`.
+///
+/// So the bound is checked at that door, in [`crate::fdt`], on both paths a
+/// blob can take — a `reg` entry and a reservation entry — and a blob that
+/// asks for a region running off the end of the address space is a typed parse
+/// error. The gap this leaves is real and worth naming: a `Region` written by
+/// hand elsewhere in the kernel is still unconstrained. That is a different
+/// risk from the one a blob poses, and the day something other than the parser
+/// starts constructing these is the day to revisit the trade rather than now.
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(test, derive(Debug))]
 pub struct Region {

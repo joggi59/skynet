@@ -14,6 +14,15 @@ use crate::hal;
 /// will do it at M4.
 pub struct BootConsole {
     base: *mut u8,
+    /// Set once the poll budget has been spent without the FIFO moving.
+    ///
+    /// The budget is per CONSOLE, not per byte. Per byte it multiplies: review
+    /// measured a ~160-byte fault report taking 24.2 seconds against a 30-second
+    /// CI timeout with a stuck FIFO — the contribution had only measured the
+    /// 15-byte boot marker, at 0.14 seconds, and drew the wrong conclusion from
+    /// it. A FIFO that has not moved in a million reads will not move for the
+    /// next byte, and asking again once per byte turns one stall into a hundred.
+    stuck: bool,
 }
 
 impl BootConsole {
@@ -29,6 +38,21 @@ impl BootConsole {
     /// `FR.TXFF` — transmit FIFO full.
     pub(super) const FR_TXFF: u32 = 1 << 5;
 
+    /// How many times either console path asks a full FIFO before giving up on
+    /// a byte.
+    ///
+    /// Not a timeout — there is no clock at M1 and this count has no unit. The
+    /// only property it buys is that the loop ends. Roughly a millisecond of
+    /// polling on the machines this runs on: several orders of magnitude more
+    /// than a PL011 needs to drain a character, and nothing beside the
+    /// thirty-second CI timeout it exists to prevent.
+    ///
+    /// `pub(super)` because the vector table's emergency path spells the same
+    /// loop in assembly and must not carry its own number. One budget, two
+    /// spellings, and the second one is checked against the first by nothing but
+    /// this comment — which is why they share the constant instead.
+    pub(super) const POLL_BUDGET: u32 = 1_000_000;
+
     /// # Safety
     /// `base` must be the MMIO base of a PL011 that no other code touches, and
     /// this must be called at most once for that device.
@@ -39,18 +63,27 @@ impl BootConsole {
     /// "only the boot path creates devices" a property of the language instead
     /// of an item on a review checklist.
     pub(super) const unsafe fn new(base: usize) -> Self {
-        Self { base: base as *mut u8 }
+        Self { base: base as *mut u8, stuck: false }
     }
 }
 
 impl hal::Console for BootConsole {
-    /// Write every byte, blocking until the device has accepted each one.
+    /// Write bytes until the device accepts them, or until it has plainly
+    /// stopped accepting anything.
+    ///
+    /// Not "every byte, blocking until each is accepted" — that is what this said
+    /// three lines above the early return added in the same patch. A console that
+    /// never drains would otherwise hold the kernel forever, which is the failure
+    /// this whole milestone exists to remove.
     ///
     /// No initialisation of LCR_H, IBRD, FBRD or CR. QEMU's PL011 transmits
     /// without it, and on real hardware the firmware has already configured the
     /// port it printed its own messages on. Writing a configuration sequence
     /// nobody can test against real hardware is not something M0 should do.
     fn write(&mut self, bytes: &[u8]) {
+        if self.stuck {
+            return;
+        }
         for &byte in bytes {
             // SAFETY:
             //
@@ -72,9 +105,35 @@ impl hal::Console for BootConsole {
             // holder can interleave. The one aliasing exception is
             // `Failure::fail_stop`, which is sound because the kernel has
             // already failed and nothing else will run again.
+            // The poll is BOUNDED, and the byte is dropped when the budget runs
+            // out rather than waited for forever.
+            //
+            // `while TXFF {}` is the obvious spelling and it is unbounded in the
+            // one direction that matters: a UART that answers and never drains.
+            // No exception is ever taken, so no guard, no state machine and no
+            // watchdog can intervene — review demonstrated it by pointing this
+            // poll at QEMU virt's PCIe MMIO window, which reads back with TXFF
+            // set forever. Two exceptions on the clock, nothing on the console,
+            // and a thirty-second CI timeout indistinguishable from a hang.
+            //
+            // This is not a timeout. There is no clock here and the count has no
+            // unit; the only property being bought is that the loop ends. A
+            // console that eats a byte is a bad console. A console that stops the
+            // kernel is a bad kernel.
             unsafe {
                 let fr = self.base.add(Self::FR) as *const u32;
-                while read_volatile(fr) & Self::FR_TXFF != 0 {}
+                let mut budget = Self::POLL_BUDGET;
+                while read_volatile(fr) & Self::FR_TXFF != 0 {
+                    budget -= 1;
+                    if budget == 0 {
+                        // Give up on this console, not just on this write. See
+                        // the field's comment: the alternative is one stall per
+                        // byte, which is what turned a bounded poll into
+                        // twenty-four seconds of a thirty-second budget.
+                        self.stuck = true;
+                        return;
+                    }
+                }
                 write_volatile(self.base.add(Self::DR) as *mut u32, byte as u32);
             }
         }

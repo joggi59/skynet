@@ -180,7 +180,22 @@ const _: () = assert!(
      shutdown would issue a truncated function ID"
 );
 
-/// The vector table.
+/// What the emergency path prints, and the only reason its loop terminates.
+///
+/// It used to be `.asciz` inside the assembly, walked with `ldrb`/`cbz` until a
+/// zero byte turned up — the only loop in the image with no compile-time bound,
+/// terminating on memory a stack overflow destroys. `POLL_BUDGET` bounds the
+/// wait for the FIFO; it never bounded the walk. Corrupt the NUL and the padding
+/// behind it and the path prints memory until something else stops it, raising
+/// no exception on the way.
+///
+/// Defined here instead, so the length is a compile-time constant the loop
+/// counts down and the bytes have exactly one definition. In `.failpath` with
+/// the code that reads it, for the reason everything else in that section is.
+#[unsafe(link_section = ".failpath")]
+static REFAULT_MARKER: [u8; 16] = *b"SKYNET_REFAULT\r\n";
+
+/// The vector table, and the two emergency rungs it branches to.
 ///
 /// Sixteen entries of 128 bytes, 2 KiB aligned. Both are architectural
 /// requirements: `VBAR_EL1`'s low eleven bits are RES0, so a misaligned write
@@ -193,134 +208,314 @@ const _: () = assert!(
 /// table where the hardware would read it as the middle of `_start`.
 /// `ci/constitution-check.sh --check vector-alignment` now measures the result.
 ///
-/// Each entry saves the registers it is about to clobber, loads its own index,
-/// and branches to the shared handler. Entries are kept to a handful of
-/// instructions because 128 bytes is a hard limit the assembler will not warn
-/// about — overflow one and the next entry simply starts in the middle of your
-/// code.
+/// Each entry reads the guard, decides which of four rungs it is on, and
+/// branches. Nothing else lives here.
+///
+/// The emergency paths used to be inlined into the macro, so all sixteen entries
+/// carried a private copy of the marker string, the console poll and the PSCI
+/// call — 124 bytes of the 128 available, with no room for any of the four
+/// defects review then found. They are shared code in `.failpath`, below `.text`
+/// and reached by a branch, and an entry is 92 bytes — objdump, not memory: this
+/// sentence said 84 and `.text` while `link.ld`, in the same patch, said 92 and
+/// `.failpath`.
+///
+/// 128 bytes is a hard limit the assembler will not warn about: overflow one and
+/// the next entry starts in the middle of your code. `link.ld` asserts it.
+///
+/// The two shared rungs are emitted from the bottom of this same block, into
+/// `.failpath`, as numbered assembler labels. They are not functions and have no
+/// names; see the comment above them for why.
 ///
 /// # Safety
 ///
-/// Not callable. This is a table of exception entry points, reached only by the
-/// processor taking an exception.
+/// The `extern "C" fn` in the signature is a lie of convenience — it is how a
+/// naked block gets an address for `boot.rs` to load into `VBAR_EL1`. The only
+/// sound use of this item is to take that address. Calling it is unsound, and
+/// every clause below says why.
+///
+/// **How the processor enters it.** At `VBAR_EL1 + slot * 0x80`, one of sixteen
+/// fixed offsets, chosen by the hardware from the exception's origin and type —
+/// never at the start of the symbol as a whole except when the slot happens to
+/// be 0. `boot.rs` writes `VBAR_EL1` with `adrp`/`add` and an `isb` BEFORE it
+/// sets `sp` and before it branches to any Rust, so the table is live for the
+/// whole life of the kernel, including the handful of boot instructions that
+/// have no stack yet.
+///
+/// **`sp` is whatever the faulting context left.** An exception taken at EL1h to
+/// EL1 does not change the stack pointer. It may be misaligned, it may point
+/// outside RAM, and in the boot window above it holds whatever reset left there.
+/// Every instruction ahead of the `b {handler}` is chosen so this cannot matter:
+/// no push, no `bl`, no stack access of any kind. `exception_entry` does need a
+/// usable `sp`, and nothing on this path can give it one — that is a precondition
+/// the entry inherits and cannot discharge.
+///
+/// **Nothing is saved and nothing is restored, because nothing returns.**
+/// `exception_entry` is `-> !`, and both shared rungs end in a `wfi` loop. The
+/// price is the faulting context's registers. Read out of the disassembly rather
+/// than remembered: the entry clobbers `x0`–`x3`; the marker rung additionally
+/// clobbers `x1`, `x3` and `w4`–`w7`; the quiet rung clobbers `x0`. `x30` is
+/// untouched, there being no `bl` anywhere on this path. So the only surviving
+/// record of where the machine was is `ELR_EL1`, `ESR_EL1` and `FAR_EL1`, which
+/// is why `exception_entry` reads all three before it does anything else.
+///
+/// **The at-most-once invariant on `fault_stop` is held HERE**, in the ladder,
+/// and not in `fault_stop`, whose own SAFETY comment names this function as the
+/// holder. Rung one is reached only by falling past three equality compares, so
+/// it runs only when the guard word matches none of `SILENT`, `STOPPING` or
+/// `FAILING`; it stores `FAILING` before branching, and `exception_entry` is the
+/// sole caller of `Failure::fault_stop`. The load and the store are distinct
+/// instructions and not an atomic read-modify-write, so the window between them
+/// has to be argued shut — and it is argued shut without a count. An earlier
+/// revision of this sentence said "four instructions apart". Objdump says the
+/// three rungs that store reach their `str` by three different paths of three
+/// different lengths, so no single number was ever true of the ladder, and a
+/// number that is true today has to be re-derived every time the ladder is
+/// edited. What holds on all three paths: taking an exception sets `PSTATE.DAIF`
+/// to all ones (observed as `0x3c5` in the QEMU trace), so no interrupt, FIQ,
+/// SError or debug event can land in the window; and every instruction the entry
+/// executes between its `ldr` and its `str` is a `movz`, `movk`, `cmp` or `b.ne`
+/// — none of them touches memory, and none of them can fault synchronously. Both
+/// facts are readable off one disassembled entry and neither depends on how many
+/// compares the ladder grows. That argument is single-core and it expires at the
+/// second core, in the unsafe direction — the same expiry `IN_FAILURE`'s ordering
+/// note in `fail.rs` records.
+///
+/// **The rungs, and how each is reached.** Inside the entry the four are
+/// selected purely by fall-through, most degraded first, so a machine already
+/// failing badly cannot be routed back into code that does more work. Rung four
+/// is two instructions inline in the entry and branches nowhere, so reaching and
+/// running it needs no memory beyond the entry the processor is already
+/// executing. Rungs three and two are NOT fall-through: they are `b 30f` and
+/// `b 40f` out of `.vectors` into the two bodies in `.failpath`. Neither body
+/// carries a name anything can bind to, which is not the same as the section
+/// being empty of symbols: `readelf -sW` shows `.failpath` holding three —
+/// `REFAULT_MARKER`, and the mapping symbols `$x` and `$d` the assembler emits
+/// to mark where code becomes data. `$x` sits on the quiet rung's first byte.
+/// It is still not a binding target: a mapping symbol is `STB_LOCAL` and scoped
+/// to its input object, and `ld.lld` never offers one to resolve a reference.
+/// Measured, not assumed, because the premise this replaces was not: an `extern`
+/// block with `#[link_name = "$x"]` in a portable module stops the build with
+/// `ld.lld: error: undefined symbol: $x`, and `$d` the same, even though the
+/// linker names the very object doing the referencing as the one that defines
+/// them. Control cannot slide from one body into the other either: the quiet
+/// rung ends `31: wfi; b 31b`, which never
+/// runs off its end into the marker rung sitting immediately after it, and the
+/// marker rung ends with an explicit `b 30b`.
+///
+/// **What this section does not claim.** Not containment. RFC-0002 section 5
+/// withdrew that on measured grounds and this is not the place to reinstate it.
+/// The table still carries a mangled `FUNC LOCAL HIDDEN` symbol at entry 0's
+/// address, and a portable file naming it through `#[link_name]` links and runs:
+/// measured, `kernel_main` doing so printed `SKYNET_BOOT_OK`, then a full
+/// `SKYNET_FAULT` report, then powered the machine off, on a boot where no
+/// exception had occurred. Deleting `__vectors_entries` from `link.ld` removed
+/// the reach that needed no attribute at all; it did not remove reach, and no
+/// arrangement of symbols can, because `VBAR_EL1` is an address and the
+/// processor needs no name to branch.
+///
+/// What IS bounded is EFFECT. Entry is at sixteen fixed offsets and nowhere
+/// else. No incoming general-purpose register is read — the slot index is an
+/// immediate the entry writes into `x0` itself — but `sp` is the exception to
+/// that clause and was not always named here: rung one branches to
+/// `exception_entry`, whose first instruction is `str x30, [sp, #-16]!`, so a
+/// caller does choose where sixteen bytes land, and `sp = 0x40080810` lands them
+/// on `.guard`. Every rung ends the
+/// machine: a report then PSCI, a marker then PSCI, PSCI, or `wfi`. A caller
+/// that reaches this gets a shutdown or a stop, and it gets one report of a
+/// fault that did not happen. That is the whole of what the design promises.
 #[unsafe(naked)]
 #[unsafe(link_section = ".vectors")]
 pub(super) unsafe extern "C" fn vector_table() -> ! {
     naked_asm!(
-        // Each entry: make room for x0-x30, save the two registers the entry
-        // itself uses, save the rest, load the slot index, branch.
+        // The whole entry. Read the guard, pick a rung, branch.
         //
-        // 256 bytes of stack in a path that is about to stop. RFC-0002 O-1
-        // records that a stack-overflow fault pushes further into whatever is
-        // below; fixing that properly needs the MMU and belongs with it.
-        // The entry writes no stack, and decides what to do before it touches
-        // anything at all.
+        // The rungs are tested MOST DEGRADED FIRST, so that a machine already
+        // failing badly cannot be routed back into code that does more work.
+        // The guard is only written on the rung that continues — an earlier
+        // revision stored it before comparing and could demote a lower rung back
+        // to a higher one, which lets two states oscillate forever.
         //
-        // Three states, because two were not enough. `FAILING` bounds re-entry
-        // into the fault report; nothing bounded re-entry into the emergency path
-        // below, which ends in an unconditional `hvc`. `STOPPING` is written
-        // before that path reaches a device, so a third exception stops dead
-        // without reaching one.
+        // x0 holds the guard's address only for this entry's own use. It used to
+        // be carried into the shared paths as an implicit argument they stored
+        // through — which meant a `#[link_name]` caller chose that pointer, and
+        // no such pointer existed before the paths were split out. The advance
+        // is issued here now; the paths take nothing.
+        // The whole ladder lives HERE, in `.vectors`, and nothing else does.
         //
-        // An earlier revision pushed x0-x30 first and consulted the flag eighteen
-        // faultable stores later, so a fault whose cause was the stack looped here
-        // forever — 2,328,136 exceptions in six seconds with no console output.
-        // The frame was also write-only; nothing ever read it, though the design
-        // said the report did.
+        // The rungs used to advance the guard with their own first instructions,
+        // and those instructions are in `.text` — the region this layout does
+        // NOT protect. Review zeroed memory down to 0x40080810, leaving the
+        // guard and the whole table verifiably intact, took one fault, and got
+        // 3,813,734 exceptions with an empty console: vector entry, first byte
+        // of the emergency path, repeat. The bound was true of the ladder and
+        // not of the machine, which is the same shape of defect the ladder was
+        // built to close, one level down.
         //
-        // Because the entry writes the flag, `fault_stop` must not check it:
-        // checking twice would halt on the first fault and print nothing.
+        // Every advance is now issued from the entry, which the processor
+        // branches to and which sits in the section the layout protects. The
+        // functions it branches to hold no state and write nothing.
         ".macro ENTRY, idx",
-        "  adrp x0, {guard}",
-        "  add  x0, x0, #:lo12:{guard}",
-        "  ldrb w1, [x0]",
-        // Three tests, in this order, before anything is written.
+        "  adr  x0, {guard}",
+        "  ldr  w1, [x0]",
+
+        // Rung four, INSIDE the entry. Two instructions, no branch out.
         //
-        // Compared, not tested non-zero: a stray byte in .bss must not read as
-        // re-entry and cost a real fault its report. And STOPPING is tested
-        // FIRST, because it is the state in which no device may be touched — a
-        // third exception must reach the dead stop without passing through the
-        // path that writes the UART.
-        //
-        // The flag is written only on the path that continues. An earlier
-        // revision stored FAILING unconditionally before comparing, which turned
-        // the third exception's STOPPING back into FAILING and let the two states
-        // oscillate: report, emergency, report, emergency. Caught by reading the
-        // disassembly, after the edit that was supposed to prevent it silently
-        // failed to apply.
-        "  cmp  w1, #{stopping}",
-        "  b.eq 25f",
-        "  cmp  w1, #{failing}",
-        "  b.eq 20f",
-        "  mov  w2, #{failing}",
-        "  strb w2, [x0]",
-        "  mov  x0, #\\idx",
-        "  b    {handler}",
-        // Already failing. Say so on the console, then stop.
-        //
-        // An earlier revision halted here in silence, which made the one failure
-        // this table exists to prevent — a fault storm — indistinguishable from a
-        // clean shutdown, and made a corrupted guard byte turn the FIRST genuine
-        // fault into nothing at all. Sixteen bytes and no stack: the address is
-        // built with `movz`, the string is read with a post-indexed `ldrb`, and
-        // TXFF is polled so a full FIFO drops nothing.
-        // x0 still holds the flag's address. Claim the emergency path before
-        // reaching a device, so a fault inside it lands on the dead stop.
-        "20: mov  w2, #{stopping}",
-        "    strb w2, [x0]",
-        "    movz x1, #{uart_hi}, lsl #16",
-        "    adr  x0, 23f",
-        "21: ldrb w2, [x0], #1",
-        "    cbz  w2, 24f",
-        "22: ldr  w3, [x1, #{fr_off}]",
-        "    tbnz w3, #{txff_bit}, 22b",
-        "    str  w2, [x1, #{dr_off}]",
-        "    b    21b",
-        "23: .asciz \"SKYNET_REFAULT\\r\\n\"",
-        "    .balign 4",
-        // Stop the machine, rather than spin. A `wfi` loop here is honest about
-        // the state but indistinguishable from a hang, and a hang is what this
-        // whole path exists to remove: CI would see a timeout, which is the
-        // signal that hid the original storm for two contributions.
-        "24: movz x0, #{psci_off_lo}",
-        "    movk x0, #{psci_off_hi}, lsl #16",
-        "    hvc  #0",
-        // Reached two ways: PSCI SYSTEM_OFF returning, which it does not; and a
-        // third exception, whose entry found STOPPING and came straight here
-        // without touching a device. Both mean the machine is beyond diagnosis,
-        // and this is the only end that cannot itself fault.
-        "25: wfi",
-        "    b    25b",
+        // It used to be a function in `.failpath`, and the entry branched to it
+        // — so an image with `.failpath` destroyed and the guard and all sixteen
+        // entries provably intact still stormed: 442,394 exceptions per second,
+        // empty console, exit 124. Third time in this file that the thing
+        // deciding was protected and the thing executing was not. The end of the
+        // ladder cannot depend on any memory but the entry the processor is
+        // already executing.
+        "  movz w2, #{silent_lo}",
+        "  movk w2, #{silent_hi}, lsl #16",
+        "  cmp  w1, w2",
+        "  b.ne 1f",
+        "9: wfi",
+        "   b    9b",
+
+        // Rung three: the marker path faulted. Advance to SILENT, stop quietly.
+        "1: movz w3, #{stopping_lo}",
+        "   movk w3, #{stopping_hi}, lsl #16",
+        "   cmp  w1, w3",
+        "   b.ne 2f",
+        "   str  w2, [x0]",
+        "   b    30f",
+
+        // Rung two: the report faulted. Advance to STOPPING, print the marker.
+        "2: movz w2, #{failing_lo}",
+        "   movk w2, #{failing_hi}, lsl #16",
+        "   cmp  w1, w2",
+        "   b.ne 3f",
+        "   str  w3, [x0]",
+        "   b    40f",
+
+        // Rung one: not failing. Claim it and take the full report path.
+        "3: str  w2, [x0]",
+        "   mov  x0, #\\idx",
+        "   b    {handler}",
         ".endm",
 
         ".align 7", "ENTRY 0",
         ".align 7", "ENTRY 1",
         ".align 7", "ENTRY 2",
         ".align 7", "ENTRY 3",
-        // Current EL with SP_ELx — the four that can happen at M1.
+
         ".align 7", "ENTRY 4",
         ".align 7", "ENTRY 5",
         ".align 7", "ENTRY 6",
         ".align 7", "ENTRY 7",
-        // Lower EL using AArch64 — unreachable until EL0 exists at M3.
+
         ".align 7", "ENTRY 8",
         ".align 7", "ENTRY 9",
         ".align 7", "ENTRY 10",
         ".align 7", "ENTRY 11",
-        // Lower EL using AArch32 — never; AArch32 is not supported.
+
         ".align 7", "ENTRY 12",
         ".align 7", "ENTRY 13",
         ".align 7", "ENTRY 14",
         ".align 7", "ENTRY 15",
 
-        handler = sym exception_entry,
-        guard    = sym super::fail::IN_FAILURE,
-        failing  = const super::fail::FAILING,
-        stopping = const super::fail::STOPPING,
-        uart_hi  = const (super::platform::UART0_BASE >> 16),
-        dr_off   = const super::pl011::BootConsole::DR,
-        fr_off   = const super::pl011::BootConsole::FR,
-        txff_bit = const super::pl011::BootConsole::FR_TXFF.trailing_zeros(),
+        // ─── THE TWO SHARED RUNGS, WITH NO NAME TO CALL THEM BY ──────────────
+        //
+        // Emitted from inside this block, into `.failpath`, where the layout
+        // wants them: below `.text`, above the guard, reached by the branches
+        // above and by nothing else.
+        //
+        // They were two `#[unsafe(naked)] extern "C" fn`s until review reached
+        // both of them from a PORTABLE module with `#[link_name]` — no `asm!`,
+        // no `core::arch`, no `#[cfg(target_arch)]`, no register name, nothing
+        // `ci/constitution-check.sh --check hal-boundary` greps for. Reproduced:
+        // `kernel_main` calling the marker rung printed SKYNET_BOOT_OK and then
+        // SKYNET_REFAULT and powered the machine off, on a boot where no fault
+        // had occurred. The rungs assume the ladder advanced them; a caller that
+        // never touched the ladder gets a machine that reports a fault that did
+        // not happen, or shuts down mid-boot.
+        //
+        // A function is a symbol, and a symbol is an entry point for anything
+        // that can spell its name. Making them `unsafe`, private, `#[doc(hidden)]`
+        // or unmangled changes nothing: `#[link_name]` binds to whatever the
+        // symbol table holds, and lowering the linkage to local does not help
+        // either — this crate is one LTO module and both were already local `t`.
+        //
+        // So there is no symbol. `.pushsection` places the bodies and numbered
+        // local labels name them; assembler-local labels produce no symbol table
+        // entry, so the reach-around is an undefined-symbol error at link time
+        // rather than a working call. Both halves measured: `nm` on the linked
+        // ELF shows nothing at either address, and the reach-around that worked
+        // one commit ago now stops the build with
+        // `ld.lld: error: undefined symbol`.
+        //
+        // This costs the two bodies their doc comments and their `# Safety`
+        // sections, which is a real loss and the reason the equivalent prose is
+        // here instead. It buys the one property those comments could only ask
+        // for politely.
+        ".pushsection .failpath, \"ax\"",
+        ".p2align 2",
+
+        // Rung three: stop the machine without touching a device.
+        //
+        // Reached from a vector entry, which advanced the ladder to SILENT
+        // before branching here, or from rung two below once the marker is out.
+        // Takes nothing, advances nothing, stores nothing.
+        "30: movz x0, #{psci_off_lo}",
+        "    movk x0, #{psci_off_hi}, lsl #16",
+        "    hvc  #0",
+        // PSCI SYSTEM_OFF does not return. If it ever does, stop here rather
+        // than branch anywhere — there is nothing left that can be trusted.
+        "31: wfi",
+        "    b    31b",
+
+        // Rung two: the report faulted. Print a fixed marker, then stop.
+        //
+        // No stack, no `BootConsole`, no constructor. The address is formed with
+        // a single `movz … lsl #16`, the string is `REFAULT_MARKER` sitting in
+        // this same section, and the poll on TXFF is BOUNDED — see
+        // `BootConsole::POLL_BUDGET`.
+        "40: movz x1, #{uart_hi}, lsl #16",
+        "    adr  x3, {marker}",
+        "    movz w7, #{marker_len}",
+        // The per-byte budget. A UART that answers and never drains is not
+        // bounded by any state machine: no exception is ever taken, so nothing
+        // can intervene. Review pointed QEMU virt's PCIe MMIO window at this
+        // poll — it reads back with TXFF set forever, and the machine spun with
+        // two exceptions on the clock and nothing on the console. A byte that
+        // will not go is dropped, and the marker comes out short rather than
+        // never.
+        "41: ldrb w4, [x3], #1",
+        "    movz w5, #{poll_lo}",
+        "    movk w5, #{poll_hi}, lsl #16",
+        "42: ldr  w6, [x1, #{fr_off}]",
+        "    tbz  w6, #{txff_bit}, 43f",
+        "    subs w5, w5, #1",
+        "    b.ne 42b",
+        // Budget spent on this byte. Drop it and count it — an earlier version
+        // branched back to the load without counting, so a FIFO that stayed full
+        // walked the pointer forever and the length bound bought nothing.
+        "    b    44f",
+        "43: str  w4, [x1, #{dr_off}]",
+        "44: subs w7, w7, #1",
+        "    b.ne 41b",
+        "    b    30b",
+
+        ".popsection",
+
+        handler     = sym exception_entry,
+        guard       = sym super::fail::IN_FAILURE,
+        failing_lo  = const (super::fail::FAILING & 0xffff),
+        failing_hi  = const (super::fail::FAILING >> 16),
+        stopping_lo = const (super::fail::STOPPING & 0xffff),
+        stopping_hi = const (super::fail::STOPPING >> 16),
+        silent_lo   = const (super::fail::SILENT & 0xffff),
+        silent_hi   = const (super::fail::SILENT >> 16),
+        marker      = sym REFAULT_MARKER,
+        marker_len  = const REFAULT_MARKER.len(),
+        uart_hi     = const (super::platform::UART0_BASE >> 16),
+        dr_off      = const super::pl011::BootConsole::DR,
+        fr_off      = const super::pl011::BootConsole::FR,
+        txff_bit    = const super::pl011::BootConsole::FR_TXFF.trailing_zeros(),
+        poll_lo     = const (super::pl011::BootConsole::POLL_BUDGET & 0xffff),
+        poll_hi     = const (super::pl011::BootConsole::POLL_BUDGET >> 16),
         psci_off_lo = const (super::psci::PSCI_SYSTEM_OFF & 0xffff),
         psci_off_hi = const ((super::psci::PSCI_SYSTEM_OFF >> 16) & 0xffff),
     )

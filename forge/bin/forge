@@ -185,7 +185,21 @@ t_tasks_claim() {
     info "expiry     4h (an abandoned claim returns the task to open)"
     echo
     info "Work only inside the worktree. Before submitting, run:"
-    detail "cd ${wt#$REPO_ROOT/} && ../../ci/build.sh --all && ../../ci/boot-test.sh"
+    # `./ci/`, not `../../ci/`.
+    #
+    # This printed `../../ci/build.sh` and that measures MAIN, not the branch.
+    # ci/lib.sh derives REPO_ROOT from its own path, so invoking the root's copy
+    # of a check evaluates the root's tree no matter which directory you are
+    # standing in. An implementer followed this line and got `--test SKIP` for a
+    # branch whose whole deliverable is a test suite — it was running against a
+    # tree where that suite does not exist.
+    #
+    # The worktree has its own ci/, merged up to date. ci/gate.sh already does
+    # this deliberately and says why: a contribution must be judged by the checks
+    # as they will exist after it lands. The instruction printed to the agent
+    # doing the work said the opposite.
+    detail "cd ${wt#$REPO_ROOT/} && ./ci/build.sh --all && ./ci/boot-test.sh && ./ci/constitution-check.sh"
+    detail "./ci/, not ../../ci/ — the root's copy measures main, not your branch"
 }
 
 t_tasks_release() {

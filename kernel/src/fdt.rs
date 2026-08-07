@@ -525,6 +525,23 @@ impl Walk {
                 // two words is the one thing here that a reader cannot recover
                 // from getting backwards, because both are plausible.
                 FDT_PROP => {
+                    // No test below can fail if this bound is weakened to
+                    // `off > end`, and that is a fact about what the tests can
+                    // see rather than about the bound. Weakened, the two words
+                    // are read first and `off += 8` then puts `off` past `end`
+                    // unconditionally, so the body bound below returns the same
+                    // `StructTruncated` for every input — the return value is
+                    // identical and no test can reach past it.
+                    //
+                    // What differs is the read extent, which is the claim at the
+                    // top of this module and not a value any caller receives.
+                    // Measured with a high-water mark inside `slice_at`, on a
+                    // blob whose structure block ends at `totalsize` with an
+                    // empty strings block there and four bytes of slice beyond:
+                    // weakened it touches `totalsize + 4`, as written it stops
+                    // at `totalsize`. So this bound is load-bearing for that
+                    // claim alone, and the suite cannot be made to say so
+                    // without instrumenting non-test code.
                     if off + 8 > end {
                         return Err(Error::StructTruncated);
                     }
@@ -747,6 +764,33 @@ mod tests {
         base: 0x4000_0000,
         len: 0x0800_0000,
     };
+
+    // -----------------------------------------------------------------------
+    // What the mutation score is a score of
+    //
+    // Two mutant sets have been run against these tests, and the number is only
+    // ever a number about the set.
+    //
+    // The first is fourteen defects chosen by hand by the author of this
+    // module — the same hand that wrote the tests, which is the weakness in it
+    // and the reason it is described rather than merely counted. All fourteen
+    // die. A reader should read that as "these fourteen guesses are covered",
+    // not as a statement about the parser.
+    //
+    // The second was chosen by a rule instead of by taste, after a survivor of
+    // exactly this shape was found from outside: take every sum that feeds a
+    // bound in this file and drop one term from it, one term at a time.
+    // Eighteen mutants. Seventeen die. The eighteenth is the `off + 8` bound in
+    // FDT_PROP, which is equivalent through this module's return value for
+    // every input — the argument, and the read-extent difference it hides, are
+    // at the site rather than here, because that is where someone weakening it
+    // will be standing.
+    //
+    // Neither set is exhaustive and neither was chosen adversarially. Two
+    // categories of defect in this file are not in either: a wrong constant
+    // that agrees with the specification's neighbour, and a misread of a field
+    // whose correct reading no test independently knows.
+    // -----------------------------------------------------------------------
 
     // -----------------------------------------------------------------------
     // Bytes a real tool produced
@@ -1286,6 +1330,64 @@ mod tests {
         let grown = field(&blob, 8) + 4;
         set_field(&mut blob, 8, grown);
         assert_eq!(err(&blob), Error::StringsBlockOutOfBounds);
+    }
+
+    /// The strings-block bound is the sum, and the test above does not say so.
+    ///
+    /// That blob ends exactly at `totalsize`, so dropping `size_dt_strings` from
+    /// the header's extent check leaves it reported as `StringsBlockOutOfBounds`
+    /// anyway — by `slice_at`, against the slice, for a different reason. The
+    /// tree's extent and the slice's extent are only two facts when the slice is
+    /// longer, which this module's opening claim explicitly allows.
+    ///
+    /// Give it a longer slice and a `nameoff` that reaches into the tail, and
+    /// without the sum the parser reads a property name out of fifteen bytes
+    /// that are not part of the tree, and acts on it.
+    #[test]
+    fn a_name_may_not_be_read_from_beyond_totalsize() {
+        const SMUGGLED: &[u8] = b"#address-cells\0";
+
+        // Only `#size-cells` is stated, so the address width is the default of
+        // two and this tree's eight-byte `reg` is not a whole number of entries
+        // — until something says otherwise.
+        let build = |nameoff: u32| {
+            let mut b = Builder::new();
+            b.begin_node("");
+            b.prop_u32("#size-cells", 1);
+            b.prop_raw(4, nameoff, &1u32.to_be_bytes());
+            b.begin_node("memory@40000000");
+            b.prop("device_type", b"memory\0");
+            b.prop("reg", &reg_body(1, 1, EXPECTED.base, EXPECTED.len));
+            b.end_node();
+            b.end_node();
+            b.end();
+            b.build()
+        };
+
+        // `prop_raw` interns nothing, so the strings block is the same length
+        // whatever `nameoff` says, and the first byte past `totalsize` is the
+        // one at `nameoff == size_dt_strings`.
+        let size_dt_strings = field(&build(0), 8);
+        let mut blob = build(size_dt_strings);
+        blob.extend_from_slice(SMUGGLED);
+        set_field(&mut blob, 8, size_dt_strings + SMUGGLED.len() as u32);
+        assert_eq!(err(&blob), Error::StringsBlockOutOfBounds);
+
+        // What the rejected blob would otherwise have been read as, spelled
+        // honestly: the smuggled name is a live one, so the fifteen bytes past
+        // the tree are the difference between an error and a region. Not a
+        // wrong error — an answer, from outside the blob's own declared extent.
+        let mut b = Builder::new();
+        b.begin_node("");
+        b.prop_u32("#size-cells", 1);
+        b.prop_u32("#address-cells", 1);
+        b.begin_node("memory@40000000");
+        b.prop("device_type", b"memory\0");
+        b.prop("reg", &reg_body(1, 1, EXPECTED.base, EXPECTED.len));
+        b.end_node();
+        b.end_node();
+        b.end();
+        assert_eq!(parse(&b.build()).unwrap().regions(), &[EXPECTED]);
     }
 
     #[test]

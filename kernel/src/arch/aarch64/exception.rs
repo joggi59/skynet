@@ -226,6 +226,82 @@ static REFAULT_MARKER: [u8; 16] = *b"SKYNET_REFAULT\r\n";
 /// `.failpath`, as numbered assembler labels. They are not functions and have no
 /// names; see the comment above them for why.
 ///
+/// # Safety
+///
+/// The `extern "C" fn` in the signature is a lie of convenience — it is how a
+/// naked block gets an address for `boot.rs` to load into `VBAR_EL1`. The only
+/// sound use of this item is to take that address. Calling it is unsound, and
+/// every clause below says why.
+///
+/// **How the processor enters it.** At `VBAR_EL1 + slot * 0x80`, one of sixteen
+/// fixed offsets, chosen by the hardware from the exception's origin and type —
+/// never at the start of the symbol as a whole except when the slot happens to
+/// be 0. `boot.rs` writes `VBAR_EL1` with `adrp`/`add` and an `isb` BEFORE it
+/// sets `sp` and before it branches to any Rust, so the table is live for the
+/// whole life of the kernel, including the handful of boot instructions that
+/// have no stack yet.
+///
+/// **`sp` is whatever the faulting context left.** An exception taken at EL1h to
+/// EL1 does not change the stack pointer. It may be misaligned, it may point
+/// outside RAM, and in the boot window above it holds whatever reset left there.
+/// Every instruction ahead of the `b {handler}` is chosen so this cannot matter:
+/// no push, no `bl`, no stack access of any kind. `exception_entry` does need a
+/// usable `sp`, and nothing on this path can give it one — that is a precondition
+/// the entry inherits and cannot discharge.
+///
+/// **Nothing is saved and nothing is restored, because nothing returns.**
+/// `exception_entry` is `-> !`, and both shared rungs end in a `wfi` loop. The
+/// price is the faulting context's registers. Read out of the disassembly rather
+/// than remembered: the entry clobbers `x0`–`x3`; the marker rung additionally
+/// clobbers `x1`, `x3` and `w4`–`w7`; the quiet rung clobbers `x0`. `x30` is
+/// untouched, there being no `bl` anywhere on this path. So the only surviving
+/// record of where the machine was is `ELR_EL1`, `ESR_EL1` and `FAR_EL1`, which
+/// is why `exception_entry` reads all three before it does anything else.
+///
+/// **The at-most-once invariant on `fault_stop` is held HERE**, in the ladder,
+/// and not in `fault_stop`, whose own SAFETY comment names this function as the
+/// holder. Rung one is reached only by falling past three equality compares, so
+/// it runs only when the guard word matches none of `SILENT`, `STOPPING` or
+/// `FAILING`; it stores `FAILING` before branching, and `exception_entry` is the
+/// sole caller of `Failure::fault_stop`. The load and the store are four
+/// instructions apart and are not an atomic read-modify-write. Nothing can
+/// interleave between them on this machine: taking an exception sets
+/// `PSTATE.DAIF` to all ones (observed as `0x3c5` in the QEMU trace), so no
+/// interrupt or SError can land in the window, and the four instructions in it
+/// are `movz`/`movk`/`cmp`/`b.ne`, none of which can fault synchronously. That
+/// argument is single-core and it expires at the second core, in the unsafe
+/// direction — the same expiry `IN_FAILURE`'s ordering note in `fail.rs` records.
+///
+/// **The rungs, and how each is reached.** Inside the entry the four are
+/// selected purely by fall-through, most degraded first, so a machine already
+/// failing badly cannot be routed back into code that does more work. Rung four
+/// is two instructions inline in the entry and branches nowhere, so reaching and
+/// running it needs no memory beyond the entry the processor is already
+/// executing. Rungs three and two are NOT fall-through: they are `b 30f` and
+/// `b 40f` out of `.vectors` into the two bodies in `.failpath`. Those bodies
+/// carry no symbol — `readelf -sW` shows `.failpath` holding exactly one, and it
+/// is `REFAULT_MARKER` — so nothing can name them, and control cannot slide from
+/// one into the other either: the quiet rung ends `31: wfi; b 31b`, which never
+/// runs off its end into the marker rung sitting immediately after it, and the
+/// marker rung ends with an explicit `b 30b`.
+///
+/// **What this section does not claim.** Not containment. RFC-0002 section 5
+/// withdrew that on measured grounds and this is not the place to reinstate it.
+/// The table still carries a mangled `FUNC LOCAL HIDDEN` symbol at entry 0's
+/// address, and a portable file naming it through `#[link_name]` links and runs:
+/// measured, `kernel_main` doing so printed `SKYNET_BOOT_OK`, then a full
+/// `SKYNET_FAULT` report, then powered the machine off, on a boot where no
+/// exception had occurred. Deleting `__vectors_entries` from `link.ld` removed
+/// the reach that needed no attribute at all; it did not remove reach, and no
+/// arrangement of symbols can, because `VBAR_EL1` is an address and the
+/// processor needs no name to branch.
+///
+/// What IS bounded is EFFECT. Entry is at sixteen fixed offsets and nowhere
+/// else. No incoming register is read — the slot index is an immediate the entry
+/// writes into `x0` itself — so a caller chooses nothing. Every rung ends the
+/// machine: a report then PSCI, a marker then PSCI, PSCI, or `wfi`. A caller
+/// that reaches this gets a shutdown or a stop, and it gets one report of a
+/// fault that did not happen. That is the whole of what the design promises.
 #[unsafe(naked)]
 #[unsafe(link_section = ".vectors")]
 pub(super) unsafe extern "C" fn vector_table() -> ! {

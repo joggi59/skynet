@@ -89,10 +89,47 @@ SECTIONS
      *
      * VBAR_EL1's low 11 bits are RES0: a misaligned table produces no error, no
      * warning and no fault — the processor truncates the address. */
+    /* THE ENTRY-COUNT ASSERT IS HERE, AND IT DEFINES NO SYMBOL.
+     *
+     * It used to read `__vectors_entries_end - __vectors_entries > 0x780`, with
+     * both names assigned at the two `.` positions below. A plain `sym = .` in a
+     * linker script is GLOBAL DEFAULT, and `__vectors_entries` was the address of
+     * vector entry 0 — the first byte of executable code in the image. Reaching
+     * it needed no `#[link_name]`, no `asm!` and no architecture construct, only
+     *
+     *     unsafe extern "C" { fn __vectors_entries() -> !; }
+     *
+     * in a portable file. Measured: `kernel_main` calling it printed
+     * SKYNET_BOOT_OK, then a full SKYNET_FAULT report naming slot cur_sp0_sync,
+     * and powered the machine off, on a boot where no exception had occurred.
+     * Same defect as the two mangled rung symbols removed one commit earlier, and
+     * an easier reach than either.
+     *
+     * `HIDDEN(...)` WAS TRIED FIRST AND DOES NOT CLOSE IT. It does everything it
+     * advertises — both symbols become NOTYPE LOCAL HIDDEN at unchanged addresses
+     * and the flat image stays byte-identical — and the reach-around above still
+     * links and still runs, because visibility governs what leaves a link, not
+     * what resolves inside one. Recorded because it looks like a fix and measures
+     * as one on every instrument except the one that matters.
+     *
+     * `. - ADDR(.vectors)` needs no name, so there is nothing to spell. The
+     * expression is evaluated where the entries end and before the padding below,
+     * which is the position the two symbols existed to mark. Verified to still
+     * bite: a table built with one ENTRY instead of sixteen stops the link with
+     * this ASSERT's own message.
+     *
+     * WHAT THIS DOES NOT DO, stated because the last three claims this branch
+     * made about its own work were withdrawn for being wider than the evidence.
+     * It closes ONE reach: the one needing no attribute. `vector_table` itself is
+     * still a `FUNC LOCAL HIDDEN` symbol at this same address, and a portable
+     * file naming it through `#[link_name]` still links and still runs — measured
+     * on this commit. Reach is not closed and cannot be closed by arranging
+     * symbols, because VBAR_EL1 is an address and the processor needs no name to
+     * branch. RFC-0002 section 5 says so and this file does not contradict it. */
     .vectors ALIGN(2048) : {
-        __vectors_entries = .;
         KEEP(*(.vectors))
-        __vectors_entries_end = .;
+        ASSERT(. - ADDR(.vectors) > 0x780,
+               "the vector table has fewer than sixteen real entries: padding would make its SIZEOF look right while the processor branches into fill")
         /* Pad to the full sixteen entries, so the size is an EQUALITY below
          * rather than a range with slack to argue about.
          *
@@ -163,8 +200,6 @@ SECTIONS
      * cur_spx_sync, full report, clean PSCI stop — so landing in the pad traps
      * into the ladder. Without the explicit fill that behaviour is an lld
      * default, which is not a guarantee. */
-    ASSERT(__vectors_entries_end - __vectors_entries > 0x780,
-           "the vector table has fewer than sixteen real entries: padding would make its SIZEOF look right while the processor branches into fill")
     ASSERT(SIZEOF(.vectors) == 0x800,
            "the vector table does not occupy its full 2 KiB: a short final entry can spill into the guard")
 

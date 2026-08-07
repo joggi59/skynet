@@ -88,6 +88,44 @@ cond_deps()   { heading "7. Dependencies";_absorb ci/constitution-check.sh --che
 # passes because the gate never runs the append-only check. A check the gate does
 # not run is documentation.
 cond_authority() { heading "6b. Authority minting";  _absorb ci/constitution-check.sh --check minting-sites; }
+
+# 6c. Reach by name — RFC-0002 O-12.
+#
+# Wired the same hour the check it runs was written, because writing a check
+# and not calling it is a defect this repository has already recorded once:
+# --check panel-leak sat in constitution-check.sh through three separate
+# widenings without gate.sh ever invoking it, so none of the three could fail
+# a merge. The same hand made the same omission again here, and it was caught
+# by a role reading the gate rather than by the gate.
+#
+# A check nothing calls is not a weak check. It is a comment.
+cond_reach()     { heading "6c. Reach by name";      _absorb ci/constitution-check.sh --check reach-around; }
+cond_valign()    { heading "6d. Vector alignment";   _absorb ci/constitution-check.sh --check vector-alignment; }
+cond_english()   { heading "9b. Repository English"; _absorb ci/constitution-check.sh --check english; }
+cond_prose()     { heading "9c. Prose and machine";  _absorb ci/constitution-check.sh --check prose-sync; }
+
+# Checks that the gate deliberately does not run, and why.
+#
+# Wiring cond_reach exposed how much bigger the problem was than the one check
+# that prompted it. An audit of every `--check` name against every name gate.sh
+# invokes found FIVE unwired: electorate, english, prose-sync, vector-alignment
+# and zero-telemetry. Three of those pass today and now run above; a merge
+# could have broken any of them and nothing would have said so.
+#
+# The remaining two report PENDING, and the gate refuses on PENDING because a
+# pending check is not a passing check. Wiring them would halt every merge for
+# reasons that have nothing to do with any contribution:
+#
+#   zero-telemetry   invariant 5. There is no network stack to make an outbound
+#                    call with. Enforceable from M6
+#   electorate       invariant 9. There is no vote yet and no electorate to
+#                    check. Enforceable from G3
+#
+# They are listed here rather than simply left out, because that is the whole
+# difference between a gap and a decision. --selftest fails if any check is
+# neither invoked above nor named here, so the next check added to
+# constitution-check.sh cannot be silently unenforced the way these five were.
+GATE_UNWIRED_CHECKS="zero-telemetry electorate"
 cond_ledger()    { heading "10b. Ledger append-only"; _absorb ci/constitution-check.sh --check provenance; }
 cond_kprov()     { heading "10c. Kernel provenance";  _absorb ci/constitution-check.sh --check kernel-provenance; }
 # A check nothing in the merge path runs is a check a judge has to be the
@@ -498,10 +536,44 @@ EOF
     # 4. Everyone approves and the claimed objective does not exist.
     _scenario "unresolvable-objective" refuse _s_bad_objective
 
+    # 5. Not a scenario — a property of this file.
+    #
+    # Every constitutional check must be either invoked by a condition above or
+    # named in GATE_UNWIRED_CHECKS with a reason. This exists because the
+    # alternative was measured: an audit of `--check` names against the names
+    # this file invokes found FIVE that nothing in the merge path ran, and one
+    # of them had been written, widened three times and never wired, so a
+    # Guardian noticing was the only thing between a violation and main.
+    #
+    # A check nothing calls cannot fail a merge, and the failure is silent in
+    # exactly the wrong direction: the gate prints a longer list of passes.
+    echo
+    heading "5. Every check is wired or exempt"
+    local declared invoked unwired missing=""
+    declared=$(grep -oE '^[[:space:]]+[a-z-]+\)[[:space:]]+check_' \
+               "$REPO_ROOT/ci/constitution-check.sh" | grep -oE '[a-z-]+\)' | tr -d ')' | sort -u)
+    invoked=$(grep -oE -- '--check [a-z-]+' "${BASH_SOURCE[0]}" | awk '{print $2}' | sort -u)
+    unwired=" $GATE_UNWIRED_CHECKS "
+    local c
+    while IFS= read -r c; do
+        [ -z "$c" ] && continue
+        printf '%s\n' "$invoked" | grep -qx "$c" && continue
+        case "$unwired" in *" $c "*) continue ;; esac
+        missing="$missing $c"
+    done <<< "$declared"
+    if [ -n "$missing" ]; then
+        fail "check(s) neither invoked nor exempted:$missing"
+        detail "wire a cond_* for each, or name it in GATE_UNWIRED_CHECKS with why"
+        failures=$((failures+1))
+    else
+        pass "$(printf '%s\n' "$declared" | grep -c .) check(s): $(printf '%s\n' "$invoked" | grep -c .) invoked, $(echo $GATE_UNWIRED_CHECKS | wc -w) exempt by name"
+    fi
+
     echo
     if [ "$failures" -eq 0 ]; then
         info "The gate cannot be merged past by a Guardian alone, by a Guardian"
-        info "overruling reviewers, by a blocking finding, or by an unmandated objective."
+        info "overruling reviewers, by a blocking finding, or by an unmandated"
+        info "objective — and no constitutional check is silently unenforced."
     fi
     rm -rf "$tmp"
     return "$failures"
@@ -577,7 +649,8 @@ run_all() {
     info "branch $C_BRANCH"
 
     cond_build; cond_lint; cond_tests; cond_boot
-    cond_budgets; cond_hal; cond_deps; cond_authority
+    cond_budgets; cond_hal; cond_deps; cond_authority; cond_reach; cond_valign
+    cond_english; cond_prose
     cond_reviewers; cond_leak; cond_guardian; cond_provenance; cond_ledger; cond_kprov
     cond_board
 
@@ -615,6 +688,8 @@ main() {
                         deps) cond_deps ;; authority) cond_authority ;;
                         ledger) cond_ledger ;; kernel-provenance) cond_kprov ;;
                         panel-leak) cond_leak ;; board) cond_board ;;
+                reach-around) cond_reach ;; vector-alignment) cond_valign ;;
+                english) cond_english ;; prose-sync) cond_prose ;;
                         reviewers) cond_reviewers ;;
                         guardian) cond_guardian ;; provenance) cond_provenance ;;
                         *) die "unknown condition '$2' (try --list)" ;;

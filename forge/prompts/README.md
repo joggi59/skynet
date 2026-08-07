@@ -78,3 +78,32 @@ exists to prevent.
 
 **Read the constitution before you begin.** Not as ceremony. Invariants marked `pending` are not
 enforced by CI, which means they are enforced by you.
+
+**Never measure in the shared worktree. Extract your own copy.**
+
+Judging anything here means building probe images: planting an `extern` in a portable file, pointing
+a UART at unmapped memory, patching a word of the linked ELF, deleting a bound to see whether a test
+notices. Every one of those writes into the tree.
+
+A contribution's worktree under `.worktrees/` is one directory, and more than one of you may be
+reading it at the same time. Three reviews were once commissioned at once against the same path, and
+one of them watched an uncommitted probe it had not written appear in `main.rs` and change between
+two of its own commands, breaking a link mid-measurement. It re-took every number in a private
+extraction and reported the collision, which is the only reason the verdict is trustworthy.
+
+So, before you measure anything:
+
+```
+D=$(mktemp -d)
+git archive <the-branch-head-you-were-given> | tar -x -C "$D"
+cd "$D"    # build, probe, break, and delete it when you are done
+```
+
+Use a private target directory too, so a sibling's build artefacts cannot be mistaken for yours.
+
+The reason this is a rule rather than a suggestion: a verdict written against a tree that shifted
+underneath it is **indistinguishable** from one written against a tree that did not. The branch pin
+catches a branch that moved before a merge; nothing catches a tree that moved before a verdict. You
+are the only one positioned to notice, and if you do notice, say so in your verdict — that a judge
+had to defend itself against its own briefing is a finding about the process, and belongs on the
+record with the rest.

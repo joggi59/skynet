@@ -263,14 +263,22 @@ static REFAULT_MARKER: [u8; 16] = *b"SKYNET_REFAULT\r\n";
 /// holder. Rung one is reached only by falling past three equality compares, so
 /// it runs only when the guard word matches none of `SILENT`, `STOPPING` or
 /// `FAILING`; it stores `FAILING` before branching, and `exception_entry` is the
-/// sole caller of `Failure::fault_stop`. The load and the store are four
-/// instructions apart and are not an atomic read-modify-write. Nothing can
-/// interleave between them on this machine: taking an exception sets
-/// `PSTATE.DAIF` to all ones (observed as `0x3c5` in the QEMU trace), so no
-/// interrupt or SError can land in the window, and the four instructions in it
-/// are `movz`/`movk`/`cmp`/`b.ne`, none of which can fault synchronously. That
-/// argument is single-core and it expires at the second core, in the unsafe
-/// direction — the same expiry `IN_FAILURE`'s ordering note in `fail.rs` records.
+/// sole caller of `Failure::fault_stop`. The load and the store are distinct
+/// instructions and not an atomic read-modify-write, so the window between them
+/// has to be argued shut — and it is argued shut without a count. An earlier
+/// revision of this sentence said "four instructions apart". Objdump says the
+/// three rungs that store reach their `str` by three different paths of three
+/// different lengths, so no single number was ever true of the ladder, and a
+/// number that is true today has to be re-derived every time the ladder is
+/// edited. What holds on all three paths: taking an exception sets `PSTATE.DAIF`
+/// to all ones (observed as `0x3c5` in the QEMU trace), so no interrupt, FIQ,
+/// SError or debug event can land in the window; and every instruction the entry
+/// executes between its `ldr` and its `str` is a `movz`, `movk`, `cmp` or `b.ne`
+/// — none of them touches memory, and none of them can fault synchronously. Both
+/// facts are readable off one disassembled entry and neither depends on how many
+/// compares the ladder grows. That argument is single-core and it expires at the
+/// second core, in the unsafe direction — the same expiry `IN_FAILURE`'s ordering
+/// note in `fail.rs` records.
 ///
 /// **The rungs, and how each is reached.** Inside the entry the four are
 /// selected purely by fall-through, most degraded first, so a machine already
@@ -278,10 +286,19 @@ static REFAULT_MARKER: [u8; 16] = *b"SKYNET_REFAULT\r\n";
 /// is two instructions inline in the entry and branches nowhere, so reaching and
 /// running it needs no memory beyond the entry the processor is already
 /// executing. Rungs three and two are NOT fall-through: they are `b 30f` and
-/// `b 40f` out of `.vectors` into the two bodies in `.failpath`. Those bodies
-/// carry no symbol — `readelf -sW` shows `.failpath` holding exactly one, and it
-/// is `REFAULT_MARKER` — so nothing can name them, and control cannot slide from
-/// one into the other either: the quiet rung ends `31: wfi; b 31b`, which never
+/// `b 40f` out of `.vectors` into the two bodies in `.failpath`. Neither body
+/// carries a name anything can bind to, which is not the same as the section
+/// being empty of symbols: `readelf -sW` shows `.failpath` holding three —
+/// `REFAULT_MARKER`, and the mapping symbols `$x` and `$d` the assembler emits
+/// to mark where code becomes data. `$x` sits on the quiet rung's first byte.
+/// It is still not a binding target: a mapping symbol is `STB_LOCAL` and scoped
+/// to its input object, and `ld.lld` never offers one to resolve a reference.
+/// Measured, not assumed, because the premise this replaces was not: an `extern`
+/// block with `#[link_name = "$x"]` in a portable module stops the build with
+/// `ld.lld: error: undefined symbol: $x`, and `$d` the same, even though the
+/// linker names the very object doing the referencing as the one that defines
+/// them. Control cannot slide from one body into the other either: the quiet
+/// rung ends `31: wfi; b 31b`, which never
 /// runs off its end into the marker rung sitting immediately after it, and the
 /// marker rung ends with an explicit `b 30b`.
 ///
@@ -297,8 +314,12 @@ static REFAULT_MARKER: [u8; 16] = *b"SKYNET_REFAULT\r\n";
 /// processor needs no name to branch.
 ///
 /// What IS bounded is EFFECT. Entry is at sixteen fixed offsets and nowhere
-/// else. No incoming register is read — the slot index is an immediate the entry
-/// writes into `x0` itself — so a caller chooses nothing. Every rung ends the
+/// else. No incoming general-purpose register is read — the slot index is an
+/// immediate the entry writes into `x0` itself — but `sp` is the exception to
+/// that clause and was not always named here: rung one branches to
+/// `exception_entry`, whose first instruction is `str x30, [sp, #-16]!`, so a
+/// caller does choose where sixteen bytes land, and `sp = 0x40080810` lands them
+/// on `.guard`. Every rung ends the
 /// machine: a report then PSCI, a marker then PSCI, PSCI, or `wfi`. A caller
 /// that reaches this gets a shutdown or a stop, and it gets one report of a
 /// fault that did not happen. That is the whole of what the design promises.

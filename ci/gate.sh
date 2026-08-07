@@ -100,6 +100,50 @@ cond_authority() { heading "6b. Authority minting";  _absorb ci/constitution-che
 #
 # A check nothing calls is not a weak check. It is a comment.
 cond_reach()     { heading "6c. Reach by name";      _absorb ci/constitution-check.sh --check reach-around; }
+
+# 0. The checks that will run must not be older than the checks on main.
+#
+# load_contribution above says the conditions run in the contribution's
+# worktree "which carries its code and its own copy of ci/ merged up to date".
+# That last clause was an assumption written as a fact, and nothing asserted it.
+#
+# Measured, on both branches in flight the hour this was written: main had moved
+# ci/ forward by three files under one of them and one file under the other, so
+# the gate would have judged each contribution with the WEAKER of the two check
+# sets. Specifically, all three dependency fail-opens closed on main that
+# morning were still open under the copy the gate would actually run, and a
+# two-line `unsafe extern` planted in a contribution's own source passed its
+# reach-around while main's token scanner caught it.
+#
+# So a contribution could be judged compliant by exactly the checks it was
+# already known to slip past. Nothing malicious is required: a branch cut on
+# Monday is judged by Monday's rules however much Tuesday learned.
+#
+# The comparison is deliberately narrow. It does not demand the branch contain
+# main's head — that would force a rebase every time any file on main moves, and
+# most of them cannot affect a verdict. It asks one question: has main advanced
+# `ci/` since this branch was cut? If so the branch is judging itself with
+# superseded instruments and must rebase. A branch that CHANGES ci/ is a
+# different matter and is not what this catches — that is the diff from the
+# merge-base to main, not to the branch.
+cond_checks_current() {
+    heading "0. Check freshness"
+    local base moved
+    base=$(git merge-base HEAD "$C_BRANCH" 2>/dev/null)
+    if [ -z "$base" ]; then
+        fail "cannot find a merge base between main and $C_BRANCH"
+        return 1
+    fi
+    moved=$(git diff --name-only "$base" HEAD -- ci/ 2>/dev/null)
+    if [ -n "$moved" ]; then
+        fail "main advanced ci/ after $C_BRANCH was cut — the gate would judge this with superseded checks"
+        while IFS= read -r m; do [ -n "$m" ] && detail "$m"; done <<< "$moved"
+        detail "rebase $C_BRANCH onto main, then resubmit. The checks that judge a contribution"
+        detail "must be the ones that will exist after it lands, which is what this file claims"
+        return 1
+    fi
+    pass "the worktree's ci/ matches main's — no check has moved since the branch was cut"
+}
 cond_valign()    { heading "6d. Vector alignment";   _absorb ci/constitution-check.sh --check vector-alignment; }
 cond_english()   { heading "9b. Repository English"; _absorb ci/constitution-check.sh --check english; }
 cond_prose()     { heading "9c. Prose and machine";  _absorb ci/constitution-check.sh --check prose-sync; }
@@ -648,6 +692,7 @@ run_all() {
     info "task $C_TASK   objective $C_OBJECTIVE   agent $C_AGENT   model $C_MODEL"
     info "branch $C_BRANCH"
 
+    cond_checks_current
     cond_build; cond_lint; cond_tests; cond_boot
     cond_budgets; cond_hal; cond_deps; cond_authority; cond_reach; cond_valign
     cond_english; cond_prose
@@ -688,7 +733,7 @@ main() {
                         deps) cond_deps ;; authority) cond_authority ;;
                         ledger) cond_ledger ;; kernel-provenance) cond_kprov ;;
                         panel-leak) cond_leak ;; board) cond_board ;;
-                reach-around) cond_reach ;; vector-alignment) cond_valign ;;
+                reach-around) cond_reach ;; checks-current) cond_checks_current ;; vector-alignment) cond_valign ;;
                 english) cond_english ;; prose-sync) cond_prose ;;
                         reviewers) cond_reviewers ;;
                         guardian) cond_guardian ;; provenance) cond_provenance ;;

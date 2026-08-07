@@ -143,11 +143,62 @@ check_reach_around() {
     local f decls
     while IFS= read -r f; do
         [ -z "$f" ] && continue
-        # Declarations only. A comment line mentioning one is a mention, and
-        # the exclusion is anchored after grep's `path:lineno:` prefix — the
-        # same mistake the check above documents having made.
-        decls=$(grep -nE '^[[:space:]]*(unsafe[[:space:]]+)?extern[[:space:]]+"' "$f" \
-                | grep -vE '^[0-9]+:[[:space:]]*(//|\*|/\*)' || true)
+        # A token scan, not a line match.
+        #
+        # The first version of this was `grep -nE '^\s*(unsafe\s+)?extern\s+"'`,
+        # and review evaded it in the most ordinary way there is:
+        #
+        #     unsafe extern
+        #         "C"
+        #     { fn __vectors_entries() -> !; }
+        #
+        # Rust does not care where the newline goes. The grep did. The resulting
+        # image reached the vector table and powered the machine off while this
+        # check AND --check hal-boundary both reported PASS. Reproduced here
+        # before the fix: two lines PASS, the identical declaration on one line
+        # FAIL.
+        #
+        # That is the third fail-open in this file, and the second written by the
+        # hand that wrote the comment above it calling a line-anchored pattern
+        # sound. The lesson is not "anchor better" — it is that a line is not a
+        # unit of Rust, so anything matching lines is guessing.
+        #
+        # So: strip comments and string literals, collapse every whitespace run
+        # including newlines, and look for the `extern` keyword followed by a
+        # string literal. The line number reported is where the keyword sits, so
+        # a reader still lands on it. Stripping literals first is what keeps a
+        # doc example or a &str containing the word from counting.
+        decls=$(python3 - "$f" <<'PY' || true
+import re, sys
+src = open(sys.argv[1], encoding="utf-8").read()
+
+# Blank comments, preserving newlines so line numbers survive. Replacing rather
+# than deleting is deliberate: deletion splices together tokens that were never
+# adjacent, which is how a scanner invents a declaration nobody wrote.
+def blank(m):
+    return re.sub(r"[^\n]", " ", m.group(0))
+masked = re.sub(r'//[^\n]*|/\*.*?\*/', blank, src, flags=re.S)
+
+# String literals are NOT blanked, and that ordering is the whole correctness
+# argument. The first attempt at this fix blanked them first and then looked for
+# `extern "` — which deletes the very quote the pattern needs, so the scanner
+# blinded itself and reported PASS on the declaration it was written to catch.
+# Their spans are recorded instead, and a match is rejected only if the `extern`
+# KEYWORD lies inside one, which is what distinguishes a declaration from a
+# &str that happens to contain the words.
+spans = [m.span() for m in re.finditer(r'r?#*"(?:\\.|[^"\\])*"', masked, flags=re.S)]
+
+# `\s` already spans newlines in Python, so this needs no flattening: the
+# pattern matches `extern "C"` however the author broke the line.
+for m in re.finditer(r'\bextern\s+"', masked):
+    i = m.start()
+    if any(a <= i < b for a, b in spans):
+        continue
+    line_no = masked.count("\n", 0, i) + 1
+    text = src.split("\n")[line_no - 1].strip()
+    print(f'{line_no}:{text}')
+PY
+)
         if [ -n "$decls" ]; then
             fail "$f declares an extern block — a portable file must bind no symbol by name"
             # Every line. No ceiling: the exemption list in this file printed

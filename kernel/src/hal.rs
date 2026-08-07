@@ -16,6 +16,12 @@
 //!
 //! Fifteen lines, zero bytes at runtime, and the difference between a boundary
 //! and a habit.
+//!
+//! The conformance block that used to sit at the bottom of this file now lives
+//! in `main.rs`. It did not move because it stopped belonging to the portable
+//! side — it still belongs there, which is why it is in `main.rs` and not in an
+//! `arch` file. It moved because `main.rs` is the only place after the library
+//! split where the traits and their implementations are both nameable.
 
 /// A byte sink reaching the operator's boot console.
 pub trait Console {
@@ -80,22 +86,101 @@ pub struct BootResources<C: Console, P: Power> {
     pub power: P,
 }
 
-/// Compile-time proof that the architecture implements the whole contract.
-///
-/// Placed here, on the portable side, so it is checked from the side that
-/// depends on it. Costs zero bytes and no runtime work.
-///
-/// This is what makes the seam real rather than conventional: a port that omits
-/// a piece nobody currently calls fails to compile, instead of silently
-/// narrowing the boundary until a second architecture arrives and discovers it.
-const _: () = {
-    const fn implements_console<T: Console>() {}
-    const fn implements_power<T: Power>() {}
-    const fn implements_cpu<T: Cpu>() {}
-    const fn implements_failstop<T: FailStop>() {}
+// ---------------------------------------------------------------------------
+// What the device tree said
+// ---------------------------------------------------------------------------
 
-    implements_console::<crate::arch::BootConsole>();
-    implements_power::<crate::arch::PowerControl>();
-    implements_cpu::<crate::arch::Processor>();
-    implements_failstop::<crate::arch::Failure>();
-};
+/// The most memory regions a [`MemoryMap`] can hold.
+///
+/// Eight, and a guess: the only machine measured reports one. RFC-0003 O-3.
+/// Exceeding it is a typed error rather than a truncated map — the whole value
+/// of a fixed bound is that crossing it is legible.
+pub const MAX_REGIONS: usize = 8;
+
+/// The most reservation entries a [`MemoryMap`] can hold.
+///
+/// Sixteen, and the same guess with the same single data point behind it: the
+/// only machine measured reserves nothing at all. RFC-0003 O-3.
+pub const MAX_RESERVED: usize = 16;
+
+/// A region of physical memory.
+///
+/// `u64` and not `usize`. A 32-bit port with a wider physical address space is
+/// a real machine, and `usize` there is a silent truncation of an address the
+/// hardware can reach.
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(test, derive(Debug))]
+pub struct Region {
+    pub base: u64,
+    pub len: u64,
+}
+
+/// What the device tree said, copied out of the blob so the blob can be released.
+///
+/// Fixed arrays and no allocation, because the thing that makes allocation
+/// possible is built from this. That is the bootstrap, stated rather than
+/// worked around.
+///
+/// The read interface is two borrowed slices and nothing else. There is
+/// deliberately no lookup by name, no accessor taking an index, and no method
+/// that hands out a [`Region`] as a thing with an identity — RFC-0001's warning
+/// about `BootResources` becoming a registry is about exactly that shape, and
+/// the one consumer this has (the frame allocator) iterates both slices once.
+pub struct MemoryMap {
+    regions: [Region; MAX_REGIONS],
+    region_count: usize,
+    reserved: [Region; MAX_RESERVED],
+    reserved_count: usize,
+}
+
+/// A fixed array in [`MemoryMap`] had no room left.
+///
+/// Returned rather than silently dropping the entry, and deliberately carrying
+/// nothing: the caller knows which array it was pushing to, and a map that
+/// quietly forgot a reservation hands out memory that is spoken for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(test, derive(Debug))]
+pub struct Full;
+
+impl MemoryMap {
+    /// A map that says nothing yet.
+    pub(crate) const fn empty() -> Self {
+        const NONE: Region = Region { base: 0, len: 0 };
+        Self {
+            regions: [NONE; MAX_REGIONS],
+            region_count: 0,
+            reserved: [NONE; MAX_RESERVED],
+            reserved_count: 0,
+        }
+    }
+
+    /// Record a region of usable memory.
+    pub(crate) fn push_region(&mut self, region: Region) -> Result<(), Full> {
+        if self.region_count == MAX_REGIONS {
+            return Err(Full);
+        }
+        self.regions[self.region_count] = region;
+        self.region_count += 1;
+        Ok(())
+    }
+
+    /// Record a region that is already spoken for.
+    pub(crate) fn push_reserved(&mut self, region: Region) -> Result<(), Full> {
+        if self.reserved_count == MAX_RESERVED {
+            return Err(Full);
+        }
+        self.reserved[self.reserved_count] = region;
+        self.reserved_count += 1;
+        Ok(())
+    }
+
+    /// Every region of memory the device tree reported.
+    pub fn regions(&self) -> &[Region] {
+        &self.regions[..self.region_count]
+    }
+
+    /// Every entry of the device tree's memory reservation block.
+    pub fn reserved(&self) -> &[Region] {
+        &self.reserved[..self.reserved_count]
+    }
+}

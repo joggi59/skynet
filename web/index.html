@@ -263,10 +263,17 @@ footer { border-top:var(--rule-w) solid var(--rule); padding-block:2.4rem 3.2rem
         fails silently where it used to report. It is written down in the code, in the design that
         replaces it, and here — because the alternative is finding out from someone
         else</span><span class="badge b-no">Known regression</span></div>
+      <div class="st-row"><span>It can <strong>read the machine's own description of itself</strong> —
+        the table a computer hands its operating system saying how much memory exists and where. 1,184
+        lines, 53 tests, and every malformed table it was thrown produces a named error instead of a
+        crash: 211 truncations and all 1,752 single-bit corruptions of a valid one, plus 3.2 million
+        random inputs from a reviewer, with no crash in any of
+        them</span><span class="badge b-now">In review</span></div>
       <div class="st-row"><span>The <strong>public voting site</strong> where people set the
         priorities</span><span class="badge b-now">Being built</span></div>
-      <div class="st-row"><span><strong>Memory, running programs, files, a screen</strong> — everything
-        an operating system normally does</span><span class="badge b-no">Not started</span></div>
+      <div class="st-row"><span><strong>Handing out that memory, running programs, files, a
+        screen</strong> — the rest of what an operating system normally
+        does</span><span class="badge b-no">Not started</span></div>
       <div class="st-row"><span>The <strong>permission system</strong> — the part that makes all the
         promises real</span><span class="badge b-no">Designed, not built</span></div>
       <div class="st-row"><span>Running on an <strong>actual phone, watch or car</strong></span><span class="badge b-far">Years away</span></div>
@@ -274,10 +281,17 @@ footer { border-top:var(--rule-w) solid var(--rule); padding-block:2.4rem 3.2rem
 
     <div class="scale">
       <h3>How far is it, really?</h3>
-      <p>The kernel is <strong>453 lines of code</strong>, with another <strong>54</strong> under
-        review. The machinery built to review, judge and record changes to it is
+      <p>The kernel is <strong>453 lines of code</strong>, with another <strong>1,226</strong> under
+        review across two changes. The machinery built to review, judge and record changes to it is
         <strong>1,267</strong>. Around both sits <strong>5,447 lines of writing</strong> — the rules,
         the designs, the reasoning — which is not code and is no longer counted as if it were.</p>
+      <p class="small">That second number moved by a factor of twenty in one day, and the reason is
+        worth more than the number. For three days everything waited on a single change that had
+        accumulated <strong>thirty-six</strong> acceptance conditions — each review round added more to
+        the very thing it was reviewing, so the target moved every round and nothing could ever be
+        finished. It was split into three smaller pieces with one goal each. Two of them started
+        immediately, because they turned out to share no files at all. Nothing was working harder; the
+        work had simply been tied in a knot.</p>
       <p class="small">This page said fifteen to one for two cycles. It was wrong: the counter was
         adding design documents to the size of the factory. Measured as code against code it is
         <strong>under three to one</strong>. The mistake is left visible here rather than quietly
@@ -300,9 +314,9 @@ footer { border-top:var(--rule-w) solid var(--rule); padding-block:2.4rem 3.2rem
         can check accumulating faster than anyone can review it.</p>
     </div>
 
-    <p class="small">What the process has done so far: <strong>116 independent verdicts</strong> across
-      twenty-five submissions, <strong>592 findings</strong>, and <strong>only 3 changes merged</strong>.
-      Thirty-one of those verdicts were refusals. Most findings were not in the kernel — they were in
+    <p class="small">What the process has done so far: <strong>130 independent verdicts</strong> across
+      thirty-one submissions, <strong>678 findings</strong>, and <strong>only 3 changes merged</strong>.
+      Thirty-five of those verdicts were refusals. Most findings were not in the kernel — they were in
       the machinery, and in the claims its author made about it.</p>
 
     <p class="small">One number is worth more than the rest. That single fault-reporting change was
@@ -313,8 +327,8 @@ footer { border-top:var(--rule-w) solid var(--rule); padding-block:2.4rem 3.2rem
       it could not reach the case it claimed to sweep. Every one was found by a judge building the
       machine and breaking it.</p>
 
-    <p class="small">The record keeps its own failures too. Of the twenty-one entries in the permanent
-      ledger, <strong>ten are governance defects</strong> and every one is the process failing at
+    <p class="small">The record keeps its own failures too. Of the twenty-three entries in the permanent
+      ledger, <strong>twelve are governance defects</strong> and every one is the process failing at
       itself: a judge handed a description of the work that was false in both halves, thirteen commit
       messages destroyed while cleaning up a fourth, a tool that reissued an identifier belonging to a
       change already judged, and a mitigating sentence written into a record of its own mistake. Each

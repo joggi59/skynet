@@ -1,0 +1,196 @@
+[task]
+id = "T-0010"
+title = "Turn a device tree blob into a MemoryMap, on the host, with nothing on the machine calling it"
+rfc = "0003"
+objective = "0002"      # Objective 0002's SECOND success criterion, in part: the
+                        # kernel learns memory "from the device tree rather than
+                        # from constants". This task builds the reader. T-0011
+                        # gives it a real blob. Neither meets the criterion alone
+                        # and both are needed for it.
+state = "open"
+estimated_difficulty = "medium"
+profile = "standard"
+supersedes = "T-0006"   # T-0006 was released when its own first criterion proved
+                        # there is no device tree at 0x4000_0000. Its parser half
+                        # is here, its boot half is T-0011, and its premise is
+                        # gone. See [task.notes].
+sequence = "Part of RFC-0003 section 8, step 3 — the half of it that needs no boot. Runnable NOW, in parallel with T-0005 and T-0009, because it touches no file either of them touches and changes nothing the machine executes."
+
+# WHAT 'Today:' MEANS IN THIS FILE. Every 'Today' clause describes MAIN as it
+# stood when this task was written — 2026-08-07, main at e906e65 — the baseline a
+# demand is measured against, never the state of a branch. A branch that has
+# already changed something makes its baseline clause the before half of a
+# before-and-after, not a false statement.
+
+statement = """
+Today `ci/build.sh --test` reports SKIP, and it reports SKIP for one reason: a
+grep for #[cfg(test)] across kernel/src and kernel/tests finds nothing. There is
+nowhere in this project to run a test. RFC-0001 O-5 predicted that the first
+person to write one would find the check turn from SKIP to FAIL, and asked that
+the shape be settled before the first test rather than after.
+
+ONE THING IS TRUE AFTERWARDS THAT WAS NOT BEFORE: given the bytes of a flattened
+device tree, the portable kernel produces a MemoryMap or a typed error, and a
+host test proves which for each input.
+
+Three pieces, and the first two exist only to make the third judgeable:
+
+  A LIBRARY TARGET. RFC-0003 section 6 measured the shape on this toolchain: a
+  [lib] beside the existing no_main [[bin]] with `test = false` on the binary,
+  and build.rs moving all three link args from `cargo::rustc-link-arg` to
+  `cargo::rustc-link-arg-bins` so the linker script stops being handed to the
+  host test link. src/lib.rs holds `pub mod hal; pub mod fdt;`. src/main.rs keeps
+  no_std, no_main, mod arch, mod panic, kernel_main, BOOT_MARKER and the HAL
+  conformance const block, which moves there because main.rs is the only place
+  after the split where the traits and their implementations are both visible.
+
+  TWO TYPES. hal.rs gains `Region { base: u64, len: u64 }` and `MemoryMap`, as
+  RFC-0003 section 2 gives them, with MAX_REGIONS = 8 and MAX_RESERVED = 16.
+  u64 and not usize: a 32-bit port with a wider physical address space is a real
+  machine and usize there is a silent truncation.
+
+  A PARSER THAT READS EXACTLY TWO THINGS. kernel/src/fdt.rs, portable: the memory
+  reservation block, and every node whose device_type is "memory" with its reg
+  decoded using the ROOT node's #address-cells and #size-cells read from the blob
+  rather than assumed. Everything else a device tree contains — paths, phandles,
+  interrupts, clocks, /chosen, /reserved-memory, initrd, any FDT below version
+  17, and anything that writes — is a named non-goal of RFC-0003.
+
+NOTHING IN THE BOOT PATH CALLS IT. boot_rust is untouched, the image does what it
+does today, and `--gc-sections` drops the parser from it. The blob does not exist
+on the machine yet and will not until the orchestrator does RFC-0003 section 8's
+step 2. Reading a real blob is T-0011.
+"""
+
+[task.acceptance]
+criteria = [
+    "ci/build.sh --test reports PASS — not SKIP and not FAIL. State how many tests ran. This is the first contribution for which that check does anything, and RFC-0003 conformance criterion 3 names the failure to expect: if it fails at link with the linker script named in the error, build.rs still uses `cargo::rustc-link-arg` where section 6 requires `cargo::rustc-link-arg-bins`, and all three args move — the script, --nmagic and --gc-sections",
+
+    "PROOF: every malformed input produces its own typed error and no panic, shown in cargo test's output. At minimum: a truncated blob; bad magic; totalsize below 40; totalsize above MAX_BLOB_LEN; totalsize larger than the slice; version < 17; last_comp_version > 17; off_dt_struct + size_dt_struct past totalsize; off_dt_strings + size_dt_strings past totalsize; a misaligned off_dt_struct; a misaligned off_mem_rsvmap; a property whose len runs past the structure block; an unterminated node; a reservation block with no terminator; a nesting depth of 33; a nameoff past the strings block",
+
+    "PROOF: a hand-built minimal blob with one /memory node yields the expected region, and the SAME region encoded with the root node's #address-cells/#size-cells at 1/1 and again at 2/2 yields it both times. That is what proves the cell widths are read from the root rather than assumed. A cell count above 2 for either is a typed error, tested",
+
+    "PROOF: a blob with more than MAX_REGIONS memory regions, and one with more than MAX_RESERVED reservation entries, each produce a typed error rather than a truncated map. RFC-0003 O-3 records 8 and 16 as guesses with one data point behind them — QEMU virt reports one region and zero reservations — so the only thing this design can offer is that exceeding them is legible",
+
+    "PROOF: a zero-length reservation entry is skipped and does not terminate the block, and the (0, 0) pair does terminate it. Both readings of the same encoding, both tested. RFC-0003 section 3 notes the rounding expression underflows on a zero-length entry; the rounding itself is T-0007's",
+
+    "REVIEW: the parser is iterative and depth-bounded at 32, and no function in fdt.rs calls itself. State how you established it — a call graph, or the absence of any self-reference — rather than asserting it. A recursive descent over external input, in a kernel whose stack has no guard page, is the storm T-0005 is still repairing",
+
+    "REVIEW: no arithmetic on a value read from the blob is unchecked, and every read is bounds-checked against the slice. overflow-checks = true is on in release, so an unchecked add on a malformed header is a panic, and a panic prints SKYNET_PANIC — the marker that means the kernel has a bug. Malformed input must never reach it",
+
+    "REVIEW: every FDT header field, every token value, the 4-byte token alignment, the NUL-then-pad name encoding, the len/nameoff order in FDT_PROP and the reservation block layout are checked against the Devicetree Specification, and the submission states which version was consulted and what was checked. RFC-0003 section 1a checked all of them against QEMU's real blob, which is agreement with one producer and not with the standard — that gap is RFC-0003 conformance criterion 13 and it is this task's to close. A wrong constant is a defect in the RFC, not in the patch: say so and stop rather than bending the parser around it",
+
+    "The artefact does not change behaviour. `nm` still places _start at 0x4008_0000, `readelf -S` still shows .vectors present, non-zero and 2 KiB aligned — checked with readelf, because --check vector-alignment exits 0 when the section is absent — ci/lib.sh:kernel_binary() still finds the binary, `grep -c '^\\[\\[package\\]\\]' kernel/Cargo.lock` is 1, and kernel/Cargo.toml still declares no [dependencies], [build-dependencies] or [dev-dependencies], not even an empty one. Report the flat image size before and after; today it is 4,836 bytes of nano's 196,608. Growth is not automatically a defect but must be explained, because the parser is unreferenced and --gc-sections should drop it",
+
+    "`ci/constitution-check.sh --check reach-around` passes with lib.rs and fdt.rs counted among the portable files. Run it by hand: the gate does not run this check, so nothing in the merge path would catch a portable file that declares an extern block. Related, and not the same thing: RFC-0002 section 5 withdrew its containment claim on measured grounds — the design bounds effect, not reach, because VBAR_EL1 is an address — so do not write a criterion, a comment or a claim here about what portable code cannot reach",
+
+    "No #[allow(dead_code)], #[allow(unused)] or equivalent silencing is added anywhere. A `pub` item in a library target is not dead code, which is why the parser can land with no caller; if you find yourself needing a suppression, the item is in the wrong target",
+
+    "OPEN: RFC-0003 section 2 gives MemoryMap private fields and names no read interface, and its only reader is T-0007's allocator. Choose the smallest interface that allocator can use unchanged, state it in the submission in one sentence, and add nothing else. No lookup by name or index and no method handing out a Region by identity — RFC-0001's warning about BootResources becoming a registry is about that shape. If the interface cannot be chosen without knowing what the allocator does, say so instead of guessing",
+
+    "WHERE A FINDING GOES. A review finding on this task is a new criterion HERE if it is about the parser's handling of some input, the crate split breaking the artefact, or a test that does not test what it claims. A finding about x0, validating the blob's address, the failure path, SKYNET_MEM_FAIL, or the allocator is a NEW TASK — T-0011 and T-0007 already exist for two of those. This task never runs on the machine, and a criterion added here that can only be judged by booting cannot be judged at all",
+]
+
+[task.scope]
+touches = [
+    "kernel/Cargo.toml",       # [lib], and test = false / bench = false on the bin
+    "kernel/build.rs",         # all three link args to rustc-link-arg-bins
+    "kernel/src/lib.rs",       # new: pub mod hal; pub mod fdt;
+    "kernel/src/main.rs",      # bin-only; the HAL conformance const block moves here
+    "kernel/src/hal.rs",       # Region, MemoryMap; loses the conformance block
+    "kernel/src/fdt.rs",       # new, portable, and the bulk of the work
+]
+does_not_touch = [
+    "ci/                — including ci/build.sh's --test guard. If --test reports FAIL rather than PASS, the fix is in kernel/, which is what RFC-0003 section 6 reproduced deliberately in a throwaway package so the error would name itself",
+    "rfcs/              — if a constant in RFC-0003 section 2 disagrees with the Devicetree Specification, release the task with the citation. Amending it is the architect's",
+    "roadmap/, governance/, CONSTITUTION.md, constitution.toml, .provenance/",
+    "tasks/            — including this file",
+    "kernel/src/arch/  — ALL of it. T-0005 is open against boot.rs, link.ld, exception.rs, fail.rs and pl011.rs, and T-0009 against the first two. The split can be done without editing one arch file; [task.notes] says how",
+    "kernel/src/panic.rs",
+    "kernel/src/frames.rs — T-0007's whole subject. Do not create it, do not stub it",
+]
+
+[task.constitutional]
+at_risk = [
+    "7 — no kernel dependencies (enforced from M0): fdt, device-tree, dtb-parser and vfdt exist and do this job well. Writing it IS the invariant. Cargo.lock must still resolve exactly one package after a library target is added, which is what the check reads",
+    "6 — HAL boundary (enforced from M0): fdt.rs is portable BECAUSE a flattened device tree is a data format and not an architecture. No cfg, no target_arch, no extern block, and no physical address in a usize. MAX_BLOB_LEN is portable too — it bounds this parser's appetite rather than describing a board, which is why it goes in fdt.rs and not in platform.rs",
+    "4 — frugality (enforced from M0): #[cfg(test)] code is not in the release binary and costs nothing. Report the image number anyway, because the split changes how the link is driven and that is the part that could surprise",
+    "3 — total provenance (enforced now): RFC-0003's constants agree with one producer's blob. Whether they agree with the specification is unrecorded, and this task is where that gets written down",
+]
+
+[task.notes]
+hints = """
+WHAT HAPPENED TO T-0006, AND WHY THIS FILE EXISTS.
+
+T-0006 asked for the premise to be measured before any code was written. It was,
+and the premise was false in both halves: nothing is placed at 0x4000_0000 for an
+ELF, and the blob QEMU would have built is 1 MiB — twice the gap DTB_MAX_LEN
+described. The task was released rather than patched around, which is what its
+OPEN criterion instructed. RFC-0003 was then amended, and T-0006's parser half
+survives here almost unchanged while its boot half is T-0011 and its premise is
+deleted. T-0006 is marked superseded and must not be claimed.
+
+WHY THE CRATE SPLIT IS NOT ITS OWN TASK, WHICH IS THE ONE PLACE THIS FILE IS
+BIGGER THAN THE RULE WOULD LIKE.
+
+The rule in forge/prompts/decomposer.md is that a task whose acceptance criteria
+cannot be evaluated until a later task lands is not a task but half of one. The
+split alone is exactly that: its only mechanical evidence is `--test` reporting
+PASS, and there is nothing to run until a test exists. A split-only contribution
+would be judged entirely by checks the gate already runs, which is not a task —
+it is a CI run. So the split and its first tests land together.
+
+The risk that argues the other way is real and is worth naming: the split touches
+the build of everything, and if it misbehaves it drags the parser back with it.
+The answer is not a criterion, it is an escape hatch — IF THE SPLIT IS REFUSED
+AND THE PARSER IS NOT, split this task rather than revising it. That is a new
+task, and this sentence is your authority to ask for one.
+
+HOW TO SPLIT WITHOUT EDITING ANY FILE IN arch/, WHICH MATTERS BECAUSE THREE
+CONTRIBUTIONS ARE OPEN AGAINST arch/ RIGHT NOW.
+
+Five files under arch/ say `use crate::hal`, and panic.rs says `crate::hal` too.
+Moving hal into the library does not force those edits: a `use skynet_kernel::hal;`
+at the top of main.rs binds the name `hal` in the bin crate's root module, so
+`crate::hal::...` continues to resolve everywhere in the binary. Check it rather
+than trust it, but if it holds, the whole split lands in four files and none of
+them is contended. main.rs also needs the library's items it uses directly, and
+the conformance const block, which names crate::arch::BootConsole and friends —
+those types are in the bin, which is why the block cannot stay in hal.rs.
+
+TRAPS, EVERY ONE OF THEM PAID FOR ALREADY ON THIS PROJECT.
+
+  Do not write #[should_panic] tests. [profile.dev] sets panic = "abort", so a
+  should_panic test aborts the runner instead of passing. Every failure this
+  parser can produce is a typed error, which is what makes that constraint free.
+
+  cargo test builds for the HOST. There is no [build] target default in
+  .cargo/config.toml — it sets only the linker for the bare-metal target — so
+  the test run picks the host triple. That is what makes the split work, and it
+  is also why nothing under arch/ is reachable from a test. RFC-0003 O-7 records
+  that gap and leaves it open; do not try to close it here.
+
+  ci/build.sh --lint runs clippy WITH --target aarch64-unknown-none-softfloat, so
+  cfg(test) is off and your test modules are not linted. A warning only cargo
+  test can see will not fail --lint. Read cargo test's output.
+
+  ci/build.sh --size does not rebuild. It objcopies whatever is in target/. A
+  figure taken without a fresh build describes a different tree, and that has
+  already cost this project a cycle.
+
+  The parser reads big-endian on a little-endian target built with +strict-align,
+  and with the MMU off every access is Device-nGnRnE where an unaligned load
+  faults. Convert with from_be_bytes on copied byte arrays. Never cast the blob
+  to a typed pointer. The host tests will not catch a violation of this — x86 and
+  aarch64 Linux both tolerate what the bare machine will not.
+
+  A hand-built blob is a fixture you wrote, so a test that only proves the parser
+  agrees with your own encoder proves your encoder. The defence is criterion 8:
+  the encoding is checked against the specification, not against itself.
+
+WHAT THIS TASK DOES NOT OWN. tasks/open/T-0008.toml carries the debts and their
+owning roles. The two nearest: nothing in ci/ measures [budget.boot_memory]
+although every profile declares it enforced from M1 (RFC-0003 O-6, orchestrator),
+and /reserved-memory is not parsed and belongs with real hardware at M9 (O-2,
+architect). Neither is a reason to add anything here.
+"""

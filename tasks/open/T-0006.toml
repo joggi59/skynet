@@ -10,7 +10,23 @@ objective = "0002"      # Objective 0002's SECOND success criterion, verbatim: "
                         #
                         # Not 0001: its milestone list is ["M0"] and none of its six
                         # criteria concern memory.
-state = "open"
+state = "superseded"
+superseded_by = ["T-0010", "T-0011"]
+superseded_on = "2026-08-07"
+# WHY, in the fewest words that are still true. This task's group A asked for the
+# premise to be measured before anything was built. It was measured, and it was
+# false in both halves: nothing is placed at 0x4000_0000 for an ELF, at any RAM
+# size, with or without -dtb; and the blob QEMU would have built is 0x10_0000
+# bytes, twice the gap DTB_MAX_LEN described. The task was released, exactly as
+# its OPEN criterion instructed. RFC-0003 was then amended around a Linux-format
+# Image and x0, and every DTB_BASE sentence below is now wrong.
+#
+# Nothing in this file may be claimed. Its group B (the crate split) and group C
+# (the parser and its host tests) survive in T-0010 with the DTB_MAX_LEN cases
+# rewritten to MAX_BLOB_LEN; its group D (the boot glue) survives in T-0011 on
+# the amended premise. It is kept rather than deleted because criterion A1 is the
+# reason a parser was never written for a blob that was not there, and that is
+# the most valuable thing this file contains.
 estimated_difficulty = "medium"
 profile = "standard"
 first_of = "0003"       # T-0007 is the second half. Ordering is in [task.notes].

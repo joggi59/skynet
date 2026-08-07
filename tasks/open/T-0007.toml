@@ -9,12 +9,38 @@ objective = "0002"      # Objective 0002's THIRD success criterion, verbatim:
 state = "open"
 estimated_difficulty = "medium"
 profile = "standard"
-depends_on = "T-0006"   # Hard. See [task.notes]. Do not claim this before T-0006
-                        # has merged: MemoryMap does not exist, and `cargo test`
-                        # does not run.
+depends_on = ["T-0010", "T-0011"]
+# AMENDED 2026-08-07 by the decomposer, for the RFC-0003 amendment and nothing
+# else. Three things changed in this file and no criterion was relaxed:
+#
+#   depends_on was "T-0006". T-0006 is superseded — its own first criterion
+#   proved there is no device tree at 0x4000_0000 for an ELF. T-0010 now gives
+#   this task MemoryMap and a `cargo test` that runs; T-0011 gives it a boot path
+#   that has already parsed a real blob. Both must have merged.
+#
+#   The blob is no longer at a constant. Its address is whatever the loader put
+#   in x0 — measured at six different values from one binary — and its size is
+#   0x10_0000, not the 0x0008_0000 the first revision assumed. So the blob
+#   reservation is a run-time value in the MIDDLE of the pool rather than a trim
+#   off its bottom, which RFC-0003 section 3 says the index space must tolerate
+#   and section 4's bitmap already does.
+#
+#   Every remaining reference to T-0006 below reads as T-0010 or T-0011.
+#
+# ONE THING WAS NOT FIXED, AND IS FLAGGED RATHER THAN QUIETLY LEFT. This file
+# carries thirty acceptance criteria across four subjects — the reservation
+# union, the bitmap's placement, the allocator's shape, and the test that is the
+# objective's criterion. On the measurement that shaped T-0009 to T-0011 — a
+# 54-line change refused twelve times while its task grew to thirty-six criteria
+# — that is a task that cannot converge, and the remedy is to cut it into three,
+# not to trim its criteria. It is left alone here because its inputs do not exist
+# yet and re-cutting it against an unwritten MemoryMap interface would be a
+# second guess. RE-CUT THIS BEFORE IT IS CLAIMED, once T-0011 has merged and the
+# interface T-0010 chose is on main. That is a decomposer's job, not the
+# implementer's, and an implementer who claims it as written should say so.
 
 statement = """
-T-0006 gives the kernel a truthful MemoryMap. This gives it the ability to hand
+T-0011 gives the kernel a truthful MemoryMap. This gives it the ability to hand
 parts of that memory out, one 4 KiB frame at a time, and to take them back
 without losing count.
 
@@ -30,8 +56,12 @@ smaller; that trade was made against a constraint you cannot see from here.
 Four things must exist when this is done:
 
   THE RESERVATION UNION. RFC-0003 §3: the reservation block from the blob, the
-  kernel image from KERNEL_BASE to __kernel_end, the blob itself from DTB_BASE
-  for its validated totalsize, and the bitmap's own frames. Reservations round
+  kernel image from KERNEL_BASE to __kernel_end, the blob itself — at the address
+  the loader put in x0, for its validated totalsize, which is 1 MiB on QEMU virt
+  at every RAM size measured and sits in the MIDDLE of the pool, splitting the
+  free memory rather than trimming its bottom — and the bitmap's own frames. The
+  512 KiB below KERNEL_BASE is ordinary free memory holding QEMU's dead 40-byte
+  bootloader stub; nothing reserves it and nothing should. Reservations round
   OUTWARD — first frame floor(base / FRAME_SIZE), last frame
   ceil((base + len) / FRAME_SIZE) - 1 — because a frame that is partly reserved
   is entirely reserved, and the opposite rounding hands out a frame overlapping
@@ -77,7 +107,7 @@ criteria = [
     "PROOF: a region set with a hole between two regions. The frame index space skips the hole, total() counts no frame in it, and a frame freed from the second region returns to the second region — allocate the pool, free one index known to be in the upper region, allocate once, and show the same index comes back",
     "PROOF: a zero-length reservation entry reserves nothing and is skipped rather than underflowing the last-frame expression. (0, 0) is also the reservation block's terminator; show both readings are handled",
     "PROOF: an exhausted pool returns None from alloc and does not panic, available() is 0 and total() is unchanged; and a MemoryMap for which no valid bitmap placement exists produces a typed error rather than a truncated bitmap. Test the failing placement as well as the working one",
-    "ci/build.sh --test reports PASS, cargo test shows zero panics across the whole set, and the number of tests it runs is higher than T-0006 left it. State both numbers",
+    "ci/build.sh --test reports PASS, cargo test shows zero panics across the whole set, and the number of tests it runs is higher than T-0010 left it. State both numbers",
 
     # --- B. On the machine --------------------------------------------------
     "PROOF: boot the SAME binary at -m 128M, -m 64M and -m 8M with temporary instrumentation printing total() and available(), and show three different totals that match the machine. State the EXPECTED count from each RAM size BEFORE the measured one — RFC-0003 §4 states 32,768 frames under -m 128M and 2,048 under nano's 8 MiB ceiling. -m 64M is in no RFC and is the point: a build that hardcodes a size passes every other criterion here and fails this one",
@@ -128,7 +158,7 @@ does_not_touch = [
     "roadmap/, governance/, CONSTITUTION.md, constitution.toml",
     ".provenance/",
     "tasks/            — including this file",
-    "kernel/src/fdt.rs — T-0006's. Touch it only if the read interface T-0006 chose cannot express what §4 needs, and then say exactly what was missing rather than widening it quietly",
+    "kernel/src/fdt.rs — T-0010's. Touch it only if the read interface T-0010 chose cannot express what §4 needs, and then say exactly what was missing rather than widening it quietly",
     "kernel/src/arch/aarch64/link.ld — the bitmap is placed at run time above __kernel_end, which already exists. If you find yourself wanting a section, stop: that is a static by another name",
     "kernel/src/arch/aarch64/exception.rs, fail.rs, hex.rs, pl011.rs, psci.rs, cpu.rs",
     "kernel/src/panic.rs",
@@ -149,16 +179,17 @@ hints = """
 WHY THIS IS THE SECOND TASK AND NOT THE SECOND HALF OF ONE.
 
 RFC-0003 is right that discovery and frames are one design. They are not one
-contribution, and the reason is the order rather than the size: T-0006 wires the
+contribution, and the reason is the order rather than the size: T-0011 wires the
 parser into the boot path and proves at three RAM sizes that what the kernel
 believes changes with the machine, so by the time this task starts the map is
 already real. The failure RFC-0003 warns about — an allocator built over a
 hardcoded range — cannot happen in this order, because the range this allocator
 is handed came from a blob whose contents were measured before it existed.
 
-Do not claim this before T-0006 has merged. It needs MemoryMap to exist, it
-needs FrameAllocator's input type to be stable, and it needs `cargo test` to
-run at all — none of which is true on today's main.
+Do not claim this before T-0010 and T-0011 have merged. It needs MemoryMap to
+exist, it needs FrameAllocator's input type to be stable, it needs `cargo test`
+to run at all, and it needs a blob address that came from x0 rather than from a
+constant — none of which is true on today's main.
 
 TRAPS.
 

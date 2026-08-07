@@ -1,0 +1,180 @@
+[task]
+id = "T-0011"
+title = "Validate the blob the loader handed us, and learn the machine's memory from it"
+rfc = "0003"
+objective = "0002"      # Objective 0002's SECOND success criterion, completed:
+                        # "The kernel knows which physical memory exists and
+                        # which of it is already spoken for, from the device tree
+                        # rather than from constants." T-0010 built the reader.
+                        # This is where it reads a real machine.
+state = "blocked"
+blocked_on = "RFC-0003 section 8 step 2 — the four ci/ changes, which belong to the orchestrator and to nobody else. Until ci/boot-test.sh boots the flat image, x0 is zero on the gate's machine and this kernel correctly reports SKYNET_MEM_FAIL and no boot marker, forever. Claiming this before then produces a red gate for a reason that is not the patch's."
+estimated_difficulty = "medium"
+profile = "standard"
+depends_on = ["T-0009", "T-0010"]
+supersedes = "T-0006"   # T-0006's group D, rebuilt on the amended premise. Its
+                        # groups B and C are T-0010's.
+sequence = "RFC-0003 section 8, step 3 of 3, and the only kernel task in this milestone that cannot land before a ci/ change does."
+
+# WHAT 'Today:' MEANS IN THIS FILE. Every 'Today' clause describes MAIN as it
+# stood when this task was written — 2026-08-07, main at e906e65 — the baseline a
+# demand is measured against, never the state of a branch.
+
+statement = """
+By the time this is claimed, three things have happened. T-0009 gave the kernel
+an Image header and a `boot_rust(dtb: u64)` that ignores its argument. The
+orchestrator switched ci/boot-test.sh to boot the flat image, so x0 now holds a
+device tree blob's address on the gate's own machine. T-0010 built a parser and
+proved it against hand-built blobs on the host.
+
+ONE THING IS TRUE AFTERWARDS THAT WAS NOT BEFORE: what the kernel believes about
+physical memory comes from the blob it was handed, and it differs between two
+machines because the machines differ.
+
+The boot path gains, in this order and no other:
+
+  1. validate `dtb` and the 40-byte header at it, all of it, before one byte of
+     the structure block is read;
+  2. form a &'static [u8] of exactly totalsize bytes — one unsafe block, one
+     construction site;
+  3. fdt::parse, giving a MemoryMap.
+
+Nothing consumes the map yet. It is parsed and dropped; T-0007's allocator is its
+reader and BootResources still has two fields.
+
+AND A FAILURE PATH THAT NAMES ITSELF. Any failure in that sequence writes
+SKYNET_MEM_FAIL and one of a fixed, small set of compile-time reasons to the
+console the boot path already holds, and powers the machine off — before the boot
+marker, so ci/boot-test.sh fails on the absent marker while the console says why.
+`x0 == 0` gets its OWN reason, distinct from bad magic: it means the kernel was
+booted as an ELF, which is a misconfiguration in ci/ and not a corrupt blob, and
+a build that reports it as bad magic sends the reader to the wrong file.
+
+NO FALLBACK AND NO SEARCH. If validation fails the kernel does not invent a
+memory map. RFC-0003 rejects both in terms: a search that finds 0xd00dfeed in
+uninitialised RAM builds a memory map out of noise, and a fallback constant is
+what makes the device tree optional, which is a constant with extra steps and is
+what the objective's criterion 2 forbids.
+"""
+
+[task.acceptance]
+criteria = [
+    "PROOF: boot ONE flat image, identified by sha256, at -m 128M, -m 64M and -m 8M with temporary instrumentation printing the discovered region's base and length, and show three lengths that differ and match the machine. State the EXPECTED value from each RAM size BEFORE reporting the measured one. -m 64M appears in no RFC and that is the point: a build that learned the two sizes a criterion names passes a two-size proof. This is RFC-0003 conformance criterion 4",
+
+    "PROOF: corrupt the four magic bytes AT THE ADDRESS IN x0 and show SKYNET_MEM_FAIL with a reason, no boot marker, and a clean exit through PSCI — not a timeout, not SKYNET_PANIC. State how you established that the write landed before the kernel's read. RFC-0003 section 1a measurement 5 is the window to use: with a Linux-format image the blob is a ROM region installed at machine reset, so -S plus a halted machine sees it before any kernel code has run",
+
+    "PROOF: boot the SAME binary as an ELF and show SKYNET_MEM_FAIL with the x0 == 0 reason — textually distinct from the bad-magic reason — no boot marker, clean exit. This is the failure a misconfigured ci/ produces and it must name itself. RFC-0003 section 1a measurement 9 established that the same binary still boots both ways, which is what makes this runnable at all",
+
+    "Every check RFC-0003 section 1 lists runs before any structure-block byte is read, and the submission lists them against the RFC: dtb != 0; 8-byte alignment; magic; totalsize >= 40 and <= MAX_BLOB_LEN; version >= 17; last_comp_version <= 17; off_dt_struct + size_dt_struct <= totalsize; off_dt_strings + size_dt_strings <= totalsize; off_mem_rsvmap <= totalsize; off_dt_struct 4-byte aligned; off_mem_rsvmap 8-byte aligned; dtb + totalsize does not wrap. Every one in checked arithmetic — overflow-checks = true means an unchecked add on a malformed header is a panic, and a panic prints SKYNET_PANIC, which is the marker that means the kernel has a bug rather than bad input",
+
+    "The failure path emits only compile-time constants. No discovered value — no address, no size, no count, no field read from the blob — reaches the console, and kernel_main still prints nothing but the boot marker. Invariant 5 is pending until M6 and CI will not catch a violation; the console and the power token are the two the boot path already holds, so `ci/constitution-check.sh --check minting-sites` still reports exactly 4 call sites, two in boot.rs and two in fail.rs",
+
+    "REVIEW: the ONE unsafe block that builds the blob slice carries a // SAFETY: naming what makes it sound — validated totalsize, bounded window, one construction site — and says why a &'static [u8] over memory the kernel does not own is defensible. There is exactly one such construction and the submission points at it by line",
+
+    "BootResources is unchanged at two fields, and the parsed MemoryMap is dropped. Its consumer is T-0007, where RFC-0003 section 5 puts the growth to three fields and where RFC-0001's argument about BootResources becoming a registry must be re-checked. No #[allow(dead_code)] and no placeholder reader; an underscore binding on a value with no consumer yet is not a suppression",
+
+    "The temporary instrumentation is removed before submission, the tree is rebuilt, and the numbers re-taken on the tree actually submitted. SKYNET_PROFILE=nano ci/build.sh --size after an explicit build, reported before and after; today the image is 4,836 bytes of 196,608 and a parser is the first real spend of this milestone's budget. The standing gate is green — those are checks the gate owns and are not itemised here",
+
+    "OPEN: RFC-0003 section 5 says the failure path writes 'one of a fixed set of reasons' and does not enumerate the set. State the set you shipped, in the submission, and keep it small and fixed. A reason assembled at run time is a runtime value on the console",
+
+    "OPEN: RFC-0003 section 1 states plainly that the kernel CANNOT check that [dtb, dtb + totalsize) lies inside RAM, because knowing where RAM is, is what the blob is for, and argues that a garbage x0 therefore produces a synchronous external abort reported by the existing vector table rather than a hang. Do not add a range check against a constant to close it. If your reading of the code says some garbage x0 hangs instead of faulting, say so in the submission — that is a finding against RFC-0003 and against T-0005's fault path, not something to patch here",
+
+    "WHERE A FINDING GOES. A review finding on this task is a new criterion HERE if it is about the validation set, the failure path, the slice construction, or a discovered value that is wrong or leaks. A finding about the parser's internals belongs to T-0010 and one about reserving, placing or handing out frames belongs to T-0007 — both exist, and both are the right place to send it. A finding about the boot contract, the RAM-size option ci/boot-test.sh does not have, or [budget.boot_memory] going unmeasured is a ci/ debt with an owner: tasks/open/T-0008.toml, orchestrator. This task's criteria must not grow to cover any of them",
+]
+
+[task.scope]
+touches = [
+    "kernel/src/arch/aarch64/boot.rs",     # validate, slice, parse, fail legibly
+]
+does_not_touch = [
+    "ci/                — the four changes this task waits on are RFC-0003 section 8's and are the orchestrator's. If they have not landed, this task is not claimable; that is what state = blocked means, and working around it in kernel/ is explicitly a non-goal of the RFC",
+    "rfcs/              — if the validation RFC-0003 section 1 specifies cannot be written as specified, release the task with the measurement",
+    "roadmap/, governance/, CONSTITUTION.md, constitution.toml, .provenance/",
+    "tasks/            — including this file",
+    "kernel/src/fdt.rs — T-0010's. Touch it only if the interface it chose cannot express what the boot path needs, and then say exactly what was missing rather than widening it quietly",
+    "kernel/src/frames.rs — T-0007's whole subject. Nothing here allocates, reserves, or places a bitmap",
+    "kernel/src/arch/aarch64/link.ld — __image_size is T-0009's and already exists. Nothing here needs a section or a symbol",
+    "kernel/src/arch/aarch64/platform.rs — no address constant is added. MAX_BLOB_LEN is portable and lives in fdt.rs",
+    "kernel/src/main.rs, hal.rs, panic.rs, and the rest of kernel/src/arch/",
+]
+
+[task.constitutional]
+at_risk = [
+    "5 — zero telemetry (pending, M6): this adds a second thing the kernel can say on the console, and the values in scope are facts about the operator's machine. Every byte must be a compile-time constant. CI will not catch a violation of this one",
+    "6 — HAL boundary (enforced from M0): the boot glue is architectural and stays in arch/. The parser it calls is portable. The only thing crossing is a slice of bytes and a MemoryMap of u64s",
+    "1 — no ambient authority (pending, M4): no new minting site. The failure path uses the console the boot path already holds; a second console minted for it would take the count from 4 to 5 and that belongs in an RFC before it belongs in a diff",
+    "3 — total provenance (enforced now): the three region lengths at three RAM sizes are the only evidence anyone will have that this kernel reads the machine rather than a constant. The expected value goes in the submission BEFORE the measured one",
+]
+
+[task.notes]
+hints = """
+WHY THIS IS BLOCKED RATHER THAN MERELY LAST.
+
+RFC-0003 section 8 gives a sequence and the reason for it. Step 1 (T-0009) is a
+kernel that boots both ways. Step 2 is four ci/ changes: produce the flat image
+in do_build rather than in do_size, pass it to -kernel in run_boot while gdb
+keeps the ELF, correct --contract, and close RFC-0001 O-2 where it is cited. Step
+3 is this. Merging step 3 without step 2 gives a kernel that requires x0 and a
+gate that boots an ELF: SKYNET_MEM_FAIL, no boot marker, gate red, correctly and
+forever. Doing steps 2 and 3 in one contribution puts a ci/ change and a kernel/
+change together, which the role separation exists to prevent.
+
+So the blocker is not a preference about order. It is the only order in which
+every step leaves the gate green.
+
+TRAPS.
+
+  ci/boot-test.sh has no RAM option — QEMU_RAM is fixed at 128M. The 64M and 8M
+  boots are a direct qemu invocation with the same -M virt -cpu cortex-a72 and
+  the flat image. Running qemu by hand is not editing ci/. That the criterion
+  needs a hand-run at all is a ci/ debt with an owner (T-0008); it is not yours.
+
+  The Image route imposes a 4 MiB floor: QEMU refuses -m 2M with 'Not enough
+  space for DTB after kernel/initrd' and exits 1. Measured, not a defect in your
+  patch, and -m 8M is the smallest any criterion here asks for.
+
+  x1, x2 and x3 are zero at entry and so is sp, which is why _start sets the
+  stack before doing anything else. Nothing may be pushed above that line.
+
+  The blob is at ram_base + min(ram_size/2, 128 MiB) rounded up to 2 MiB — 64 MiB
+  into a 128 MiB machine, in the MIDDLE of the pool, not below the kernel. The
+  512 KiB below KERNEL_BASE holds QEMU's 40-byte bootloader stub and is ordinary
+  free memory. A reader who remembers the first revision of RFC-0003 will expect
+  that region to be spoken for; it is not, and nothing here should reserve it.
+
+  ci/build.sh --size does not rebuild and ci/boot-test.sh does not rebuild. Both
+  have already produced a number or a verdict describing a tree other than the
+  one under review.
+
+PROBES LIE IF THEY CAN DESTROY THEMSELVES — OR MOVE WHAT THEY MEASURE.
+
+Both halves are paid for here. Fault-path measurements were wrong by a factor of
+four, four times, because the instrumentation wrote over the code doing the
+writing; the relocated writer was still wrong, because it counted from a stack
+floor read out of a previous build, and adding a probe grows .text, which moves
+.stack, which moves the floor. Eight figures were corrected one at a time across
+four cycles with the instrument unexamined. Applied here:
+
+  A probe that reads the blob after the kernel has begun writing near it reports
+  the kernel's writes. Read on a halted machine, or say why your read is earlier
+  than any write.
+
+  One binary booted at three RAM sizes is a measurement of a machine. Three
+  binaries booted once each is a measurement of three builds.
+
+  Instrumentation is bytes in .text, so the image size you report must come from
+  the tree without it. Remove, rebuild, re-measure, re-quote.
+
+  A count that agrees with a value you also hardcoded proves nothing. State the
+  expected number from the RAM size first. The third RAM size no criterion in the
+  RFC names is the cheapest defence against a build that learned the two it would
+  be asked about.
+
+WHAT THIS TASK DOES NOT OWN. tasks/open/T-0008.toml, with owning roles. Nearest:
+nothing in ci/ measures [budget.boot_memory] though every profile declares it
+enforced from M1, and this contribution is where the number starts depending on
+the machine (RFC-0003 O-6, orchestrator); /reserved-memory is unparsed and
+belongs at M9 (O-2, architect); the blob is 1 MiB, which is 100% of nano's
+boot-memory budget, and whether its frames are released is O-10 and is allocator
+behaviour, not this task's.
+"""

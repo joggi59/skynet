@@ -1,0 +1,156 @@
+[task]
+id = "T-0009"
+title = "Give the kernel an aarch64 Image header, and carry x0 into Rust without reading it"
+rfc = "0003"
+objective = "0002"      # Serves objective 0002's SECOND success criterion by
+                        # making it reachable, not by meeting it. This task
+                        # discovers nothing. It changes the artefact so that the
+                        # loader hands the kernel a device tree at all.
+state = "open"
+estimated_difficulty = "small"
+profile = "standard"
+depends_on = "T-0005"   # Hard, and only because of the files. See [task.notes].
+sequence = "RFC-0003 section 8, step 1 of 3. Step 2 is four ci/ changes and belongs to the orchestrator. Step 3 is T-0011."
+
+# WHAT 'Today:' MEANS IN THIS FILE. Every 'Today' clause describes MAIN as it
+# stood when this task was written — 2026-08-07, main at e906e65 — which is the
+# baseline a demand is measured against, never the state of a branch. A branch
+# that has already changed something does not make its baseline clause false; it
+# makes it the before half of a before-and-after.
+
+statement = """
+Today the kernel is an ELF, and QEMU does not treat an ELF as a Linux kernel: it
+writes no bootloader stub, places no device tree anywhere in guest RAM, and
+enters with every general-purpose register zero. RFC-0003's amendment measured
+that at three RAM sizes, measured that `-dtb` changes nothing, and measured that
+the blob QEMU would have built is 1 MiB — twice the gap the first revision
+assumed it would fit in. There is no device tree to parse because there is no
+device tree.
+
+The fix is not in the parser. It is in the artefact: a Linux-format `Image` gets
+a bootloader stub, gets the blob placed, and gets `x0` set to the blob's address.
+RFC-0003 section 1 specifies the 64-byte header, and section 1a measured that a
+header-only build boots BOTH ways from one file — as a flat image with `x0`
+holding the blob, and as the ELF ci/boot-test.sh boots today with `x0` zero.
+
+That dual behaviour is the whole reason this is its own contribution. It lets the
+kernel change before ci/ does, with the gate green at every step.
+
+ONE THING IS TRUE AFTERWARDS THAT WAS NOT BEFORE: the built artefact can be
+booted as a Linux-format Image, and when it is, the blob address the loader chose
+reaches Rust in `boot_rust`'s first parameter.
+
+NOTHING READS IT. No parser, no validation, no failure path, no fdt.rs, no
+MemoryMap, no new module. `dtb` is carried and dropped. A kernel that validated
+`x0` here would fail the gate's ELF boot, where `x0` is zero and correctly so —
+which is exactly the ordering RFC-0003 section 8 exists to prevent breaking.
+"""
+
+[task.acceptance]
+criteria = [
+    "PROOF: `readelf -h` on the ELF and a hex dump of the first 64 bytes of `objcopy -O binary` output show code0 decoding as a branch (give the objdump line), code1 zero, text_offset 0x80000, image_size equal to `__kernel_end - KERNEL_BASE` with both symbol values from `nm`, flags/res2/res3/res4 zero, the ASCII bytes 41 52 4d 64 at offset 56, and res5 zero. State the flat image's total size and nm's address for _start. This is RFC-0003 conformance criterion 5b",
+
+    "`nm` places _start at 0x4008_0000 and `readelf -S` shows .vectors present, non-zero in size and 2 KiB aligned. Check .vectors with readelf and not with `ci/constitution-check.sh --check vector-alignment`, which reports skip and exits 0 when the section is absent — its passing is not evidence the table exists. The header is the first 64 bytes OF _start, so RFC-0001's C16 is unaffected; if .text has grown past 0x800 the table moves legally and the submission says so",
+
+    "PROOF: ONE build, identified by the sha256 of its flat image, boots both ways. As the ELF through `ci/boot-test.sh`: 5/5, SKYNET_BOOT_OK and nothing else, exit 0. As the flat image through a direct `qemu-system-aarch64 -M virt -cpu cortex-a72 -kernel <bin>` at -m 128M and at -m 8M: SKYNET_BOOT_OK, exit 0. Same file for both image boots and the same tree for all three. Two boots of two builds is a measurement of two builds",
+
+    "PROOF: under the flat image, halt at `break *0x40080000` and read x0 before the kernel's first instruction, at -m 128M and -m 8M. Show that x0 differs between the two, that the big-endian word at x0 is 0xd00dfeed in both, and that x1-x3 are zero. This is the promise ci/ change 3 will write into the boot contract, and the two differing addresses are why no constant may be written down: RFC-0003 section 1a measured six addresses from one binary",
+
+    "boot_rust's signature is `unsafe extern \"C\" fn boot_rust(dtb: u64) -> !` and the value is neither dereferenced, stored, compared against a constant, nor passed anywhere. `--lint` is clean with no `#[allow]` of any kind; an underscore-prefixed binding is not a suppression and is the expected shape until T-0011 gives the value a reader",
+
+    "`grep -rn 'DTB_BASE\\|DTB_MAX_LEN\\|0x4000_0000\\|0x40000000' kernel/src/` finds no new address, and `git diff` on kernel/src/arch/aarch64/platform.rs is empty. RFC-0003 section 1 is explicit that there is no DTB_BASE and cannot be one. The kernel's only new number is text_offset, which is KERNEL_BASE minus the RAM base and is already both in link.ld",
+
+    "link.ld gains `__image_size = __kernel_end - KERNEL_BASE` and its KERNEL_BASE comment no longer says the 512 KiB offset 'leaves the low region for the device tree QEMU builds'. Today that sentence is at link.ld:13-15 and it is measurably false in both halves: nothing is placed there for an ELF, and the blob is 1 MiB. Replace it with what the offset actually follows — the boot protocol's convention — and say where the blob really goes, which is an address the kernel never names",
+
+    "SKYNET_PROFILE=nano ci/build.sh --size, after an explicit build (it does not rebuild), and the submission states the flat image size before and after. Today it is 4,836 bytes of 196,608. RFC-0003 section 1a measured the header costing 0 bytes because .text had 392 bytes of slack against .vectors' 2 KiB alignment — that is a fact about that tree's slack, not a free lunch, and T-0005 may have spent it. Report the number you got; 64 bytes is the honest worst case and is not a defect",
+
+    "The standing gate is green on the submitted tree: ci/build.sh, --lint, --test, ci/boot-test.sh, --size, and the constitution checks the gate runs. Those are checks, not criteria of this task, and are not itemised here — ci/gate.sh owns the list. What IS a criterion of this task is that it adds no test, no [lib] target and no test module: the crate split is T-0010, which may land before or after this and touches no file this one touches. So --test reports whatever main gives it — SKIP today, PASS if T-0010 got there first — and either is correct here",
+
+    "OPEN: RFC-0003 section 1 puts the header in _start and section 1a measured it in `.text.boot`. RFC-0004 section 2 introduces a separate `.head` section for the same bytes and states it is made necessary by T-0005's ordering. Do NOT create `.head` here — it is RFC-0004's layout, in a file T-0005 owns. If the 64 bytes cannot be the first bytes of _start in .text.boot on this tree, release the task and say why rather than inventing a section",
+
+    "WHERE A FINDING GOES. A review finding on this task is a new criterion HERE only if it says the header is malformed, the ELF boot regressed, or dtb fails to arrive. Anything about validating dtb, parsing it, what happens when it is zero or corrupt, or what the kernel does with the memory it names is T-0011 and must be raised as a NEW TASK, not added here. This task ships a kernel that ignores x0 on purpose, and a criterion added here that requires it to stop ignoring x0 breaks RFC-0003 section 8's ordering and turns the gate red",
+]
+
+[task.scope]
+touches = [
+    "kernel/src/arch/aarch64/boot.rs",     # the 64-byte header, and boot_rust's parameter
+    "kernel/src/arch/aarch64/link.ld",     # one assignment, one corrected comment
+]
+does_not_touch = [
+    "ci/                — RFC-0003 section 8's four changes are the orchestrator's and are step 2. This task is step 1 and must land first; if you find yourself needing ci/ to make it pass, you have written step 3",
+    "rfcs/              — if the header layout in RFC-0003 section 1 does not produce a bootable image, release the task with the measurement. Amending it is the architect's",
+    "roadmap/, governance/, CONSTITUTION.md, constitution.toml, .provenance/",
+    "tasks/            — including this file",
+    "kernel/Cargo.toml, kernel/build.rs, kernel/src/lib.rs — the crate split is T-0010 and is independent of this",
+    "kernel/src/fdt.rs, kernel/src/frames.rs — do not create, do not stub",
+    "kernel/src/hal.rs, kernel/src/main.rs, kernel/src/panic.rs — boot_rust's parameter does not reach portable code",
+    "kernel/src/arch/aarch64/exception.rs, fail.rs, pl011.rs, psci.rs, cpu.rs, platform.rs, mod.rs",
+]
+
+[task.constitutional]
+at_risk = [
+    "6 — HAL boundary (enforced from M0): everything here is in arch/, which is where a boot protocol belongs. The parameter's TYPE crosses no boundary — u64, not a pointer, and it stops at boot_rust",
+    "4 — frugality (enforced from M0): 64 bytes of header, or 0 if the slack survives. Measure it, do not assume it from RFC-0003 section 1a's tree",
+    "3 — total provenance (enforced now): the two x0 values at two RAM sizes are the evidence that ci/ change 3's contract sentence is true. Nobody else will measure them on this tree",
+]
+
+[task.notes]
+hints = """
+WHY THIS IS A TASK AT ALL, WHEN IT ADDS NO CAPABILITY.
+
+RFC-0003 section 8 sequences three steps and gives the reason: step 1 makes the
+kernel bootable both ways, so ci/ can switch the artefact under it without a
+window in which the gate is red. Reversing 1 and 2 breaks the build; merging 2
+and 3 without 1 breaks the boot test; doing all three at once puts a ci/ change
+and a kernel/ change in one contribution, which the role separation exists to
+prevent. This task is step 1 and its value is entirely in the ordering.
+
+DEPENDENCY, AND IT IS ONLY ABOUT FILES.
+
+T-0005 is open against link.ld and boot.rs — the two files this touches, and no
+others. There is no logical dependency: the header does not care about the fault
+path. Do not claim this until T-0005 merges, and when you rebase, rebase on it
+rather than merging around it. If T-0005's layout moved __kernel_end or the
+stack, __image_size follows it automatically because it is defined from the
+symbol rather than from a number.
+
+WHAT HAPPENS AFTER THIS MERGES, SO YOU KNOW WHAT YOU ARE HANDING OVER.
+
+The orchestrator does RFC-0003 section 8's four ci/ changes: produce the flat
+image in do_build rather than in do_size, pass it to -kernel in run_boot while
+gdb keeps getting the ELF, correct --contract, and close RFC-0001 O-2 where it is
+cited. None of that can happen before this lands, and T-0011 cannot happen before
+all of it lands.
+
+TRAPS.
+
+  The header is data inside a #[unsafe(naked)] function. `.quad __image_size`
+  binds a linker-script symbol from assembly, which is legal in arch/ and is not
+  the reach-around `ci/constitution-check.sh --check reach-around` forbids —
+  that check fires on `extern` blocks in PORTABLE files, and boot.rs is not one.
+
+  image_size must be non-zero or the loader ignores text_offset entirely and
+  places the image where it likes. `__kernel_end - KERNEL_BASE` is the memory
+  footprint including .bss and the 64 KiB stack, not the file length. Those are
+  different numbers and the protocol asks for the larger one.
+
+  ci/build.sh --size does not rebuild, and ci/boot-test.sh does not rebuild. Both
+  have already produced a figure or a verdict describing a tree other than the
+  one under review. Build explicitly, then measure, then quote.
+
+  ci/boot-test.sh has no RAM option — QEMU_RAM is fixed at 128M — and it passes
+  kernel_binary(), which is the ELF. The flat-image boots are a direct qemu
+  invocation with the same -M virt -cpu cortex-a72. Running qemu by hand is not
+  editing ci/.
+
+  QEMU refuses `-m 2M` outright with 'Not enough space for DTB after
+  kernel/initrd' and exits 1. The Image route imposes a 4 MiB floor that the ELF
+  path did not have. That is measured (RFC-0003 section 1a), it is not a defect
+  in your patch, and -m 8M is the smallest size any criterion here asks for.
+
+PROBES MOVE WHAT THEY MEASURE. The image-size figure must come from the tree you
+submit. A temporary print of x0 is bytes in .text, and bytes in .text can push
+.vectors past its 2 KiB detent and change every number above it. Use gdb for the
+x0 reading rather than a print: RFC-0003 section 1a took it that way for exactly
+this reason, on a halted machine before any kernel code ran.
+"""

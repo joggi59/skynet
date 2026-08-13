@@ -94,12 +94,26 @@ extraction and reported the collision, which is the only reason the verdict is t
 So, before you measure anything:
 
 ```
-D=$(mktemp -d)
-git archive <the-branch-head-you-were-given> | tar -x -C "$D"
-cd "$D"    # build, probe, break, and delete it when you are done
+D=$(mktemp -d)/work
+git clone -q --no-hardlinks . "$D"
+cd "$D" && git checkout -q <the-branch-head-you-were-given>
+# build, probe, break, and delete the whole directory when you are done
 ```
 
 Use a private target directory too, so a sibling's build artefacts cannot be mistaken for yours.
+
+**Clone, do not `git archive`.** This said `git archive | tar -x` and a judge measured what that costs: an extracted tree has no `.git`, and two constitutional checks go quiet in it —
+
+```
+bare extraction   constitution: 7 passed, 5 pending, 2 SKIPPED
+private clone     constitution: 9 passed, 5 pending
+                  SKIP  no main branch          <- kernel-provenance
+                  SKIP  no tracked text files   <- repository English
+```
+
+`kernel-provenance` is the check that proves every kernel change on `main` arrived through a gate merge. In an extraction it does not fail, it does not go pending, it **skips** — so it does not even register as unfinished, and a judge reads a green summary that never asked the question. The remedy for one collision must not open a hole somewhere else, which is what this instruction did for half a day.
+
+If you have a reason to use an extraction anyway, run the git-dependent checks separately against a clone and say in your verdict which ones you did that way.
 
 The reason this is a rule rather than a suggestion: a verdict written against a tree that shifted
 underneath it is **indistinguishable** from one written against a tree that did not. The branch pin

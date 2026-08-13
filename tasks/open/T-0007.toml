@@ -142,6 +142,90 @@ criteria = [
     "OPEN: the RFC does not say what happens if the discovered regions overlap each other, or if a region overlaps the blob's window below KERNEL_BASE. State what you did in one sentence. If the answer needed a design decision rather than a typed error, say so instead of making it",
 ]
 
+# ---------------------------------------------------------------------------
+# WHERE A FINDING GOES.
+#
+# ADDED 2026-08-13 by the decomposer, and nothing else in this file changed. No
+# criterion was added, removed, relaxed or reworded, and the re-cut this file
+# has been flagged for since 2026-08-07 has NOT been done — see the header. The
+# ledger records the claim that smaller tasks converge faster as not yet
+# supported (event "correction", commit 9ebb637): T-0010's branch took 74
+# minutes against four days for T-0005, and a judge attributed that to the
+# SUBJECT — a pure function testable on the host against a fault path testable
+# only by breaking a machine — rather than to the criterion count. T-0009 is the
+# controlled experiment and is in panel at the time of writing. Nothing here is
+# cut until it returns.
+#
+# What IS added is the control that would have kept this file from reaching
+# thirty criteria in the first place, and it is deliberately not a criterion.
+# T-0010 shipped the same rule as its criterion 13; two judges ruled it "not
+# decidable" because it asks something of the REVIEW rather than of the patch,
+# and a third recorded that "all thirteen met" is unreachable by construction,
+# so its tally is permanently short by one with nothing to explain the gap.
+# `criteria` is addressed to the patch and is counted. Anything addressed to
+# the review lives here and carries the same force — reviewers read this file.
+#
+# A criterion inside `criteria` that turns out to be addressed to the review is
+# a defect in this file, not an unmet criterion. Rule it not applicable, say so,
+# and it is the decomposer's to move here.
+# ---------------------------------------------------------------------------
+[task.routing]
+rule = """
+THREE DOORS, AND ONE OF THEM SOMETIMES LEADS OUT OF THE TREE.
+
+  1. A NEW CRITERION HERE, if the finding is about the reservation union, the
+     bitmap's sizing or placement, the allocator's accounting or its shape, or
+     the exhaust-and-recover test. Those four are this task's subject and this
+     file is where they belong — which is also why this file is the one most at
+     risk of growing, and why anything outside them must go through door 2.
+
+  2. A NEW TASK, if it is about the parser's internals (T-0010 has MERGED;
+     tasks/open/T-0012.toml is open and holds fdt.rs's residuals), the boot
+     path's validation of the blob or its failure path (T-0011), or the MMU and
+     the guard page, which is an RFC nobody has written and is the blocker on
+     tasks/open/T-0008.toml. A finding about what ci/ does not measure —
+     [budget.boot_memory] above all, which two criteria here can only ask a
+     human to read by hand — is a ci/ debt with an owner, also T-0008,
+     orchestrator. None of those may be closed by adding a criterion here.
+
+  3. DOCUMENTATION, CITATIONS AND STATED RATIONALE — the door T-0010's rule did
+     not have, and the reason three findings survived three consecutive reviews
+     of that task and are on main today. It is not one door but a test, and the
+     test is whether the finding can be decided AGAINST THIS TREE ALONE:
+
+       DECIDABLE IN-TREE -> a new criterion here. A file that contradicts its
+       own per-item citations, a count the tree refutes, a test whose name
+       claims more than its body asserts, a comment describing code that is no
+       longer there. Settled with grep and a reading, by anyone, with no
+       network. This task is unusually exposed to that class: several criteria
+       ask the submission to STATE a number — expected frame counts, bitmap
+       size, bitmap_end, the largest stack object — and a stated number that
+       the tree refutes is exactly this door's business.
+
+       NOT DECIDABLE IN-TREE -> NOT a criterion, here or anywhere. The
+       Devicetree Specification is not in this repository, one judge could not
+       check a chapter number for that reason, and two judges corrected the
+       same citation to two different clauses with no way for a third to tell
+       which was right. A criterion saying "the citations are correct" hands a
+       reviewer a check nobody in the tree can perform, and a door that leads
+       somewhere unverifiable is worse than no door. Record the finding with
+       the document, its version, how it was obtained, and the clause QUOTED
+       rather than numbered. The repair is to delete the unverifiable claim or
+       to quote the clause beside it — never to swap one unverified number for
+       another.
+
+       NOT FIXABLE BY ANY PATCH -> not a criterion either. A wrong figure in a
+       merged commit message or in a submission cannot be repaired from a
+       branch. That is a ledger correction and belongs to the orchestrator.
+
+THE DOORS SHUT WHEN THIS TASK DOES. "A new criterion HERE" exists only while
+this task is open. Three findings filed against the revision of T-0010 that
+MERGED had a door and still had nowhere to go, because the file the door led to
+was in tasks/done/ before anyone could act on it. If this task has merged,
+every door leads to a new task; say so in the verdict rather than routing a
+finding into a closed file.
+"""
+
 [task.scope]
 touches = [
     "kernel/src/frames.rs",                   # new, portable

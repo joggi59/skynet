@@ -1,0 +1,250 @@
+[task]
+id = "T-0012"
+title = "Make fdt.rs's citation trail agree with itself, and make two sweeps mean their names"
+rfc = "0003"
+objective = "0002"      # Serves objective 0002's SECOND success criterion by
+                        # repairing the audit trail T-0010 was asked to produce
+                        # for it. It discovers nothing and changes no interface.
+state = "open"
+estimated_difficulty = "small"
+profile = "standard"
+sequence = "Independent. It touches one file, kernel/src/fdt.rs, which T-0009 does not touch and which T-0007 and T-0011 both name under does_not_touch. It can land before or after either and blocks neither."
+
+# WHY THIS FILE EXISTS, AND IT IS NOT BECAUSE THE FINDINGS ARE NEW.
+#
+# Every finding below was filed by a reviewer against T-0010, on three
+# consecutive passes, and closed on none. They are on main today at bd67bd9.
+# They survived for a structural reason rather than a technical one, and the
+# reason is recorded so it is not repeated:
+#
+#   T-0010's criterion 13 routed a review finding to a new criterion on that
+#   task if it was about the parser's handling of input, the crate split, or a
+#   test that does not test what it claims — and to a new task if it was about
+#   x0, the blob's address, the failure path or the allocator. Findings that had
+#   a door were fixed in the round they were filed. The citation finding fits
+#   NEITHER door, and one judge said plainly what follows: a stranded finding
+#   has no mechanism to close.
+#
+#   The two findings that DID have a door were filed against the revision that
+#   MERGED. The door led to tasks/done/T-0010.toml, which nobody may write. A
+#   door is only open while the task is.
+#
+# The rule now has a third door and a closure clause, written into
+# tasks/open/T-0011.toml and tasks/open/T-0007.toml under [task.routing]. This
+# file is the other half of the remedy: the findings need somewhere to land.
+
+statement = """
+Nothing here changes what the parser computes for a conforming blob. No public
+item changes name, signature or shape: `parse`, `MemoryMap`, `Region` and
+`Error`'s existing variants are what T-0007's allocator and T-0011's boot path
+were promised, and they stay.
+
+FOUR THINGS ARE TRUE AFTERWARDS THAT ARE NOT TRUE ON MAIN.
+
+  THE FILE NO LONGER CONTRADICTS ITSELF ABOUT WHERE ITS FACTS CAME FROM. The
+  module docstring at fdt.rs:26-28 credits chapter 5's sections as 5.1
+  (fdt_header), 5.2 (memory reservation block), 5.3 (structure block) and 5.4
+  (strings block). The file's own per-constant citations say something else and
+  say it consistently: lines 79, 82, 85 and 283 cite the header as 5.2, line 99
+  the reservation entry as 5.3, lines 90/103/260 the tokens as 5.4.1, line 381
+  the strings block as 5.5. The submission that merged the file cites "5.2
+  through 5.5" in its own commit message. So the one paragraph a reader meets
+  first disagrees with every other citation in the file and with the message
+  that shipped it.
+
+  A CITATION THE TREE CANNOT CORROBORATE EITHER CARRIES ITS CLAUSE OR LOSES ITS
+  NUMBER. fdt.rs:342 attributes the 4-byte and 8-byte block alignment rules to
+  "Section 5.2", which is the number this same file uses for the header
+  everywhere else. fdt.rs:116 and fdt.rs:619 cite `device_type` as section
+  2.3.4. Two judges corrected that number differently — 2.3.11, then 2.3.13 —
+  and a third could not check it at all, because the Devicetree Specification is
+  not in this repository and there is no network from here. That is what an
+  unverifiable citation costs: three readings, three answers, no resolution.
+
+  TWO SWEEPS EITHER PROVE THEIR NAMES OR ARE RENAMED.
+  every_single_bit_corruption_of_the_header_is_an_error_and_not_a_panic and its
+  _body_ sibling both end in `let _ = parse(&blob);` and assert nothing. They
+  are worth keeping — 1,752 blobs reaching no panic and no overflow trap is the
+  evidence behind "malformed input never reaches SKYNET_PANIC" — but half their
+  name is not established by the code beneath it. Their sibling,
+  every_truncation_of_a_good_blob_is_an_error_and_not_a_panic, does assert
+  is_err on all 211 prefixes and earns its name, which is what makes this an
+  oversight rather than a judgement.
+
+  THE PARSER STOPS ANSWERING WHERE IT SHOULD REFUSE. On input that puts a
+  property after a subnode, two things happen and both were reproduced by a
+  reviewer rather than read: a memory node's `reg` arriving after a child node
+  is recorded and then discarded by the parent's close_node, so the node's
+  memory vanishes from the map with `Ok` and no error; and a root that declares
+  #address-cells and #size-cells after its first subnode has its widths latched
+  at the 2/1 defaults, so a region encoded 1/2 decodes as base
+  0x4000_0000_0000_0000, length 0x0800_0000 — accepted, four exabytes off. The
+  specification requires properties before subnodes and no conforming producer
+  emits either shape, so this is not a bug that fires on QEMU. It is a parser
+  whose stated posture is that malformed input yields a typed error, quietly
+  returning a wrong physical base address instead.
+"""
+
+[task.acceptance]
+criteria = [
+    "The module docstring's section map agrees with every per-constant citation in the same file. Show it mechanically: `grep -n 'ection 5' kernel/src/fdt.rs` before and after, and state for each of the header, the memory reservation block, the structure block, the strings block and the token encoding the ONE number the file now uses throughout. No two lines of fdt.rs may cite different sections for the same thing",
+
+    "Every citation the file cannot corroborate from its own other citations either QUOTES the clause it rests on or drops the number. Two are known and there may be more: fdt.rs:342 attributes block alignment to the section this file uses for the header, and fdt.rs:116 and fdt.rs:619 cite `device_type` as 2.3.4. The load-bearing facts are already stated and stay — the structure block is 4-byte aligned, the reservation block is 8-byte aligned, a memory node carries `device_type = \"memory\"` as section 3.4 requires, and 3.4 is cited consistently. What must go is a bare clause number nobody in this tree can check. If you have the specification, quote the sentence beside the number and say which document and version you read and how you obtained it; if you do not, delete the number and say so. DO NOT substitute a different clause number on the strength of a review comment: this task exists partly because two judges supplied two different ones",
+
+    "The specification's date in the module docstring — '13 May 2023' — is subject to the same rule as a clause number and is not corroborated anywhere in this tree. Quote a source or remove the date. The version, v0.4, is corroborated: the file cites it against ten separate constants and dtc 1.7.2's output agrees with the encoding",
+
+    "PROOF: the two bit-flip sweeps mean their names. Either they assert `is_err()` on the flips that must fail — and then the submission states how it separated those from the flips that legitimately still parse, since a flipped name byte or pad byte leaves a parseable blob — or they are renamed to `_does_not_panic` and the file says in one line why asserting would be wrong. Both outcomes are acceptable and the choice must be stated. `let _ = parse(&blob);` under a name containing `is_an_error` is not",
+
+    "PROOF: a test reproduces the property-after-subnode drop and a test reproduces the late-cell-declaration decode, each as a blob built in the test module, each asserting what the parser does now that this task is finished. The second one is the measured case: a region the reviewer built came back as base 0x4000_0000_0000_0000 len 0x0800_0000. Whatever the answer is, it is pinned by a test rather than by a sentence",
+
+    "OPEN: RFC-0003 does not say what a parser should do with a blob whose properties follow its subnodes, because the specification forbids that shape and the RFC took the specification's word for it. Choose ONE answer and state it in the submission in one sentence: a typed error, or the current behaviour documented at the function with the reason it is safe. A silently wrong region is not one of the two. If the answer requires deciding something RFC-0003 should have decided, say so and release the task rather than deciding it inside a patch — the error set is part of the interface T-0007 and T-0011 were promised",
+
+    "The public interface is unchanged: `parse`, `MemoryMap`, `Region` and every existing `Error` variant keep their names and shapes, and `sed -n '/pub enum Error/,/^}/p' kernel/src/fdt.rs | grep -cE '^    [A-Z]'` is 29 or higher and never lower. A variant may be ADDED if criterion 6 lands on a typed error; nothing is removed or renamed. T-0011 is blocked on ci/ and T-0007 is unclaimed, so both will read this interface after this lands, and a rename here is a rebase for two tasks that have not started",
+
+    "ci/build.sh --test reports PASS and the number of tests it runs is stated and is not lower than the 54 T-0010 left. cargo test shows zero panics. Read cargo test's output rather than --lint's: ci/build.sh --lint runs clippy with --target aarch64-unknown-none-softfloat, where cfg(test) is off and your test modules are not linted",
+
+    "The artefact does not change. `SKYNET_PROFILE=nano ci/build.sh --size` after an explicit build (it does not rebuild) reports the same 4,836 bytes main carries today — the parser is unreferenced and --gc-sections drops it, so a change in this number means something in this patch reached the binary and the submission must say what. `grep -c '^\\[\\[package\\]\\]' kernel/Cargo.lock` is 1, kernel/Cargo.toml declares no dependency section, and `ci/constitution-check.sh --check reach-around` passes with fdt.rs counted among the portable files — run it by hand, the gate does not run it",
+
+    "No #[allow(dead_code)], #[allow(unused)] or equivalent silencing is added, and no #[should_panic] test is written: [profile.dev] sets panic = \"abort\", so a should_panic test aborts the runner instead of passing",
+]
+
+# ---------------------------------------------------------------------------
+# WHERE A FINDING GOES.
+#
+# NOT AN ACCEPTANCE CRITERION. T-0010 shipped this rule inside its `criteria`
+# list as criterion 13; two judges ruled it "not decidable" because it asks
+# something of the REVIEW rather than of the patch, and a third recorded that
+# "all thirteen met" is unreachable by construction, so that task's tally is
+# permanently short by one with nothing in the ledger to explain the gap.
+# `criteria` is addressed to the patch and is counted. Anything addressed to the
+# review lives here and carries the same force: reviewers read this file, and
+# the judges who found that defect cited T-0010's routing rule by line number.
+# ---------------------------------------------------------------------------
+[task.routing]
+rule = """
+  1. A NEW CRITERION HERE, if the finding is about fdt.rs's documentation,
+     citations or stated rationale, about the two sweeps, or about the
+     property-after-subnode behaviour this task settles. This task IS the third
+     door, so the class that had nowhere to go on T-0010 lands here by default.
+
+  2. A NEW TASK, if it is about anything else the parser does. The parser is on
+     main and no task owns it: T-0007 and T-0011 both name kernel/src/fdt.rs
+     under does_not_touch, and T-0010 is in tasks/done/. A finding about the
+     boot path, x0, the blob's address or the failure path is T-0011's; one
+     about reserving, placing or handing out frames is T-0007's; one about what
+     ci/ does not measure is tasks/open/T-0008.toml, orchestrator.
+
+  3. THE TEST THAT DECIDES BETWEEN THEM, for any finding about a citation or a
+     stated fact — and it is the test this task was written to demonstrate:
+
+       DECIDABLE AGAINST THIS TREE ALONE -> a criterion. A file contradicting
+       its own citations, a count the tree refutes, a test name claiming more
+       than its body asserts. Grep and a reading settle it, for anyone, with no
+       network.
+
+       NOT DECIDABLE IN-TREE -> NOT a criterion, here or anywhere. Record the
+       finding with the document, its version, how it was obtained, and the
+       clause QUOTED rather than numbered. Do not write a criterion that says
+       "the citations are correct": the Devicetree Specification is not in this
+       repository, a judge could not check a chapter number for that reason, and
+       two judges corrected the same citation to two different clauses. A door
+       that leads somewhere unverifiable is worse than no door.
+
+       NOT FIXABLE BY ANY PATCH -> not a criterion either. The fourth stranded
+       finding against T-0010 is that its submission said "fifteen functions"
+       where fdt.rs has sixteen — parse, slice_at, be_u32_at, be_u64_at,
+       align_up_4, Header::read, Header::struct_end, Header::name,
+       read_reservations, Walk::new, Walk::run, Walk::take_property,
+       Walk::close_node, single_cell, read_cells, skip_node_name; Walk::new is
+       the one the count missed. The claim that mattered — none of them calls
+       itself — was independently verified and holds. The wrong number is in a
+       merged commit message, which no branch can rewrite. It is a ledger
+       correction, event "correction", and it belongs to the orchestrator. It is
+       written here rather than nowhere, which is the whole of what this project
+       can do about that class.
+
+THE DOORS SHUT WHEN THIS TASK DOES. "A new criterion HERE" exists only while
+this task is open. Three findings filed against the revision of T-0010 that
+merged had nowhere to go the moment it merged. If this task has merged, every
+door leads to a new task; say so in the verdict rather than routing a finding
+into a closed file.
+"""
+
+[task.scope]
+touches = [
+    "kernel/src/fdt.rs",       # all of it, and nothing else
+]
+does_not_touch = [
+    "ci/                — nothing here needs a check changed. If --test or --lint disagrees with this patch, the patch is wrong",
+    "rfcs/              — if RFC-0003 must decide what criterion 6 leaves open, release the task and say what the RFC does not answer. Amending it is the architect's",
+    "roadmap/, governance/, CONSTITUTION.md, constitution.toml, .provenance/",
+    "tasks/            — including this file",
+    "kernel/src/hal.rs — Region and MemoryMap are defined there and are not this task's. If a fix here appears to need one of them changed, that is a finding about the interface and belongs in the submission, not in hal.rs",
+    "kernel/src/arch/  — all of it. This file never runs on the machine",
+    "kernel/src/main.rs, kernel/src/lib.rs, kernel/src/panic.rs, kernel/Cargo.toml, kernel/build.rs — the crate split is done and is not reopened here",
+    "kernel/src/frames.rs — T-0007's whole subject. Do not create it, do not stub it",
+]
+
+[task.constitutional]
+at_risk = [
+    "3 — total provenance (enforced now): this is the entire subject. T-0010's constitutional note said RFC-0003's constants agreed with one producer's blob and that whether they agree with the specification was unrecorded, and that task was where it got written down. What got written down sends a reader to the wrong clause for the header, for alignment and for device_type, while the file's other citations are right. A trail that is wrong in four places and right in thirty is worse than a trail that is absent, because a reader who follows one of the four cannot tell whether the parser is wrong or the citation is",
+    "7 — no kernel dependencies (enforced from M0): nothing here adds one. Cargo.lock must still resolve exactly one package",
+    "6 — HAL boundary (enforced from M0): fdt.rs stays portable. No cfg, no target_arch, no extern block, no physical address in a usize",
+    "4 — frugality (enforced from M0): the flat image is expected to be byte-identical at 4,836 bytes. Any change is a finding about this patch, not a budget question",
+]
+
+[task.notes]
+hints = """
+WHAT THIS TASK IS AN EXPERIMENT ABOUT, SO THAT THE RESULT IS READABLE.
+
+It is the first task in this project whose whole subject is a documentation
+defect, and it exists because four judges across three passes reported that the
+finding-routing rule introduced on T-0009 to T-0011 had two doors and needed
+three. The open question the rule could not answer was whether a documentation
+finding belongs in a task at all — one judge could not verify a chapter number
+because there is no specification in the tree and no network, and a criterion a
+reviewer cannot perform is worse than no criterion.
+
+The answer this file tries is that the door is real but narrow: what a task can
+demand is INTERNAL CONSISTENCY and HONEST ATTRIBUTION, both decidable with grep
+by anyone. What no task may demand is agreement with a document nobody has. If
+this task is judged and the judges find themselves reaching for the
+specification anyway, that is the finding, and it means the door should have led
+to the debt register instead.
+
+DO NOT QUIETLY IMPROVE THE PARSER.
+
+Every criterion here is either a comment, a test name, or one behaviour that a
+reviewer reproduced. The parser is 756 lines against 1,092 lines of tests and it
+passed three review passes on substance — every judge who checked the facts
+found the facts correct. A patch that arrives with a refactor attached is a
+patch whose documentation change nobody can see.
+
+TRAPS, ALL PAID FOR ALREADY ON THIS PROJECT.
+
+  ci/build.sh --size does not rebuild. It objcopies whatever is in target/. A
+  figure taken without a fresh build describes a different tree and that has
+  already cost this project a cycle.
+
+  ci/build.sh do_test opens with `require_toolchain || return 0`, so an
+  environment without aarch64-unknown-none-softfloat reports everything PENDING
+  and exits 0 — a silent pass with no SKIP line to notice. The 54 host tests
+  need only the host compiler. If you see 'build: 0 passed, 4 pending', you have
+  measured nothing. That coupling is a known ci/ defect, deferred deliberately,
+  and it is in the ledger and in tasks/open/T-0008.toml. It is not yours.
+
+  ci/build.sh --lint runs clippy WITH --target aarch64-unknown-none-softfloat,
+  so cfg(test) is off and your test modules are not linted. A warning only cargo
+  test can see will not fail --lint.
+
+  The two good-blob fixtures are the byte-for-byte output of dtc 1.7.2 for the
+  .dts sources quoted beside them. A hand-built blob you write to demonstrate
+  the property-after-subnode shape is a fixture you wrote, and a test that only
+  proves the parser agrees with your own encoder proves your encoder. Say which
+  fixtures are dtc's and which are yours.
+
+WHAT THIS TASK DOES NOT OWN. tasks/open/T-0008.toml carries the debts and their
+owning roles. Nearest: ci/build.sh's toolchain coupling and its non-rebuilding
+--size, both orchestrator's; /reserved-memory unparsed, architect's, M9. None of
+them is a reason to add anything here.
+"""

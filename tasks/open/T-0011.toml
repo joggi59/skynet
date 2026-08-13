@@ -78,9 +78,82 @@ criteria = [
     "OPEN: RFC-0003 section 5 says the failure path writes 'one of a fixed set of reasons' and does not enumerate the set. State the set you shipped, in the submission, and keep it small and fixed. A reason assembled at run time is a runtime value on the console",
 
     "OPEN: RFC-0003 section 1 states plainly that the kernel CANNOT check that [dtb, dtb + totalsize) lies inside RAM, because knowing where RAM is, is what the blob is for, and argues that a garbage x0 therefore produces a synchronous external abort reported by the existing vector table rather than a hang. Do not add a range check against a constant to close it. If your reading of the code says some garbage x0 hangs instead of faulting, say so in the submission — that is a finding against RFC-0003 and against T-0005's fault path, not something to patch here",
-
-    "WHERE A FINDING GOES. A review finding on this task is a new criterion HERE if it is about the validation set, the failure path, the slice construction, or a discovered value that is wrong or leaks. A finding about the parser's internals belongs to T-0010 and one about reserving, placing or handing out frames belongs to T-0007 — both exist, and both are the right place to send it. A finding about the boot contract, the RAM-size option ci/boot-test.sh does not have, or [budget.boot_memory] going unmeasured is a ci/ debt with an owner: tasks/open/T-0008.toml, orchestrator. This task's criteria must not grow to cover any of them",
 ]
+
+# ---------------------------------------------------------------------------
+# WHERE A FINDING GOES.
+#
+# NOT AN ACCEPTANCE CRITERION, AND THAT IS THE WHOLE OF THE CHANGE. T-0010
+# carried this rule as its criterion 13. Two judges ruled that criterion "not
+# decidable" and a third recorded that "all thirteen met" is unreachable by
+# construction: it asks something of the REVIEW rather than of the patch, so no
+# submission could meet it and none could fail it, and every tally against that
+# task is permanently short by one with nothing in the ledger to say why.
+#
+# The shape is legitimate — a task may reasonably ask a reviewer to do
+# something. What is not legitimate is putting it in a list that is counted.
+# `criteria` is addressed to the patch. Anything addressed to the review lives
+# here, and carries exactly the same force: reviewers read this file, and the
+# two who found the defect cited it by line number in their verdicts.
+#
+# A criterion inside `criteria` that turns out to be addressed to the review is
+# a defect in this file, not an unmet criterion. Rule it not applicable, say so,
+# and it is the decomposer's to move here.
+# ---------------------------------------------------------------------------
+[task.routing]
+rule = """
+THREE DOORS, AND ONE OF THEM SOMETIMES LEADS OUT OF THE TREE.
+
+  1. A NEW CRITERION HERE, if the finding is about the validation set, the
+     failure path, the slice construction, or a discovered value that is wrong
+     or leaks.
+
+  2. A NEW TASK, if it is about reserving, placing or handing out frames
+     (T-0007 exists and is the right place to send it), or about the parser's
+     internals — T-0010 has MERGED, so a parser finding is now a new task and
+     tasks/open/T-0012.toml is already open to receive fdt.rs's residuals.
+     A finding about the boot contract, the RAM-size option ci/boot-test.sh
+     does not have, or [budget.boot_memory] going unmeasured is a ci/ debt with
+     an owner: tasks/open/T-0008.toml, orchestrator.
+
+  3. DOCUMENTATION, CITATIONS AND STATED RATIONALE — the door T-0010's rule did
+     not have, and the reason three findings survived three consecutive reviews
+     and are on main today. It is not one door but a test, and the test is
+     whether the finding can be decided AGAINST THIS TREE ALONE:
+
+       DECIDABLE IN-TREE -> a new criterion here. A file that contradicts its
+       own per-item citations, a count that the tree refutes, a test whose name
+       claims more than its body asserts, a comment that describes code that is
+       no longer there. All of those are settled with grep and a reading, by
+       anyone, with no network.
+
+       NOT DECIDABLE IN-TREE -> NOT a criterion, here or anywhere. The
+       Devicetree Specification is not in this repository, one judge could not
+       check a chapter number for exactly that reason, and two judges corrected
+       the same `device_type` citation to two different clauses — 2.3.11, then
+       2.3.13 — with no way for a third to tell which was right. A criterion
+       that says "the citations are correct" hands a reviewer a check nobody in
+       the tree can perform, and a door that leads somewhere unverifiable is
+       worse than no door. The finding is recorded instead: the document, its
+       version, how it was obtained, and the clause QUOTED rather than
+       numbered. The repair is to delete the unverifiable claim or to quote the
+       clause beside it — never to swap one unverified number for another.
+
+       NOT FIXABLE BY ANY PATCH -> not a criterion either. A wrong figure in a
+       merged commit message or in a submission cannot be repaired from a
+       branch. That is a ledger correction and belongs to the orchestrator;
+       .provenance/ledger.jsonl already carries entries of event "correction"
+       doing precisely this.
+
+THE DOORS SHUT WHEN THIS TASK DOES. "A new criterion HERE" exists only while
+this task is open. Three findings filed against the revision of T-0010 that
+MERGED had a door and still had nowhere to go, because the file the door led to
+was in tasks/done/ by the time anyone could act on it. If this task has merged,
+every door leads to a new task; say so in the verdict rather than routing a
+finding into a closed file. That the last revision of a task is the one whose
+findings have no receiving artefact is a structural defect, and it is filed
+under [task.unowned.governance] in tasks/open/T-0008.toml.
+"""
 
 [task.scope]
 touches = [

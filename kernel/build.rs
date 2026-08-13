@@ -30,7 +30,13 @@ fn main() {
 
     // The cargo:: double-colon form is deliberate: unknown keys are a hard
     // error, so a typo fails the build instead of becoming inert metadata.
-    println!("cargo::rustc-link-arg=-T{}", script.display());
+    //
+    // `-bins` and not the bare `rustc-link-arg`: the bare form applies to every
+    // link this package drives, including the HOST link of `cargo test` for the
+    // library target, which then fails with the bare-metal linker script named
+    // in the error. All three args below are bare-metal image concerns and none
+    // of them means anything to a host test binary.
+    println!("cargo::rustc-link-arg-bins=-T{}", script.display());
 
     // --nmagic is not optional. LLD's default max-page-size for AArch64 is
     // 64 KiB and it aligns PT_LOAD segments to it; without this flag .rodata
@@ -38,8 +44,8 @@ fn main() {
     // emits the gaps, so a kernel of a few kilobytes measures over 128 KiB
     // against nano's 192 KiB budget. The largest budget risk in M0, and
     // entirely a link-flag question.
-    println!("cargo::rustc-link-arg=--nmagic");
-    println!("cargo::rustc-link-arg=--gc-sections");
+    println!("cargo::rustc-link-arg-bins=--nmagic");
+    println!("cargo::rustc-link-arg-bins=--gc-sections");
 
     println!("cargo::rerun-if-changed={}", script.display());
     println!("cargo::rerun-if-changed=build.rs");

@@ -17,9 +17,19 @@ license = "GPL-3.0-or-later"
 publish = false
 build   = "build.rs"
 
+# The library holds the portable, host-testable half. It exists so that
+# `cargo test` has somewhere to run: a no_std/no_main binary cannot host the
+# test harness, which is why the binary opts out of it below. Measured on this
+# toolchain in RFC-0003 section 6 before it was written down here.
+[lib]
+name = "skynet_kernel"
+path = "src/lib.rs"
+
 [[bin]]
 name = "skynet-kernel"
 path = "src/main.rs"
+test  = false                   # a no_std/no_main binary cannot host the test harness
+bench = false
 
 [profile.release]
 opt-level       = "s"

@@ -10,17 +10,22 @@ use super::pl011::BootConsole;
 use super::platform;
 use super::psci::PowerControl;
 
-/// Kernel entry point.
+/// Kernel entry point, and the first 64 bytes of it are the image header.
 ///
-/// QEMU's `-kernel` loader places the ELF at its physical addresses, builds a
-/// device tree at the RAM base, resets the CPU and sets PC here. Entry is at
-/// EL1: `virt` defaults to `virtualization=off`, so no EL2 exists.
+/// Entry is at EL1: `virt` defaults to `virtualization=off`, so no EL2 exists.
 ///
-/// Every general-purpose register is zero at entry. In particular **`x0` is not
-/// a device tree pointer** — QEMU treats an ELF image as non-Linux, never writes
-/// the bootloader stub that would load the DTB address, and resets all GPRs.
-/// That holds for a raw `Image` and not for what the boot contract specifies.
-/// RFC-0001, O-2.
+/// **The same binary boots two ways, and `x0` differs between them.** Booted as
+/// an ELF — which is what `ci/boot-test.sh` does today — QEMU treats the image
+/// as non-Linux, writes no bootloader stub, places no device tree, and resets
+/// every general-purpose register: `x0` is zero. Booted as a flat Linux-format
+/// `Image`, the loader places the blob and `x0` holds its physical address,
+/// which moves with the machine's RAM size. RFC-0003 section 1a measured six
+/// different addresses from one binary, and RFC-0001's O-2 is answered by
+/// changing the artefact rather than the contract.
+///
+/// Nothing here reads `x0`, or may: validating it would fail the ELF boot, where
+/// zero is correct. `_start` touches only `x9`–`x12` and ends in a tail branch,
+/// so whatever the loader left in `x0` reaches `boot_rust` untouched.
 ///
 /// # Safety
 ///
@@ -32,6 +37,42 @@ use super::psci::PowerControl;
 #[unsafe(link_section = ".text.boot")]
 unsafe extern "C" fn _start() -> ! {
     naked_asm!(
+        // ─── the aarch64 Linux boot protocol image header ───────────────────
+        //
+        // Sixty-four bytes of data at the front of a function, the way Linux's
+        // head.S does it: `code0` is a real branch over the rest, so the header
+        // and the entry symbol are the same address. `nm` still places _start at
+        // KERNEL_BASE and an ELF boot, which jumps to e_entry and never reads a
+        // header, executes the branch and continues below.
+        //
+        // The linker script pins this section to KERNEL_BASE, which is offset 0
+        // of the flat image — the only place a loader looks for these bytes.
+        "b    9f",              // code0: branch past the header
+        ".word 0",              // code1: unused, second half of code0's slot
+        ".quad 0x80000",        // text_offset: KERNEL_BASE minus the RAM base.
+                                // The one number this file adds, and it is a
+                                // property of the link, not of a board.
+        ".quad __image_size",   // image_size: __kernel_end - KERNEL_BASE, from
+                                // the linker script. Zero here makes the loader
+                                // ignore text_offset and place the image where
+                                // it likes, so it is a symbol and not a literal.
+        ".quad 0",              // flags, the value RFC-0003 section 1 specifies.
+                                // Bit 0 clear: little-endian. Bits 1-2 clear:
+                                // page size unspecified — Linux's own head.S
+                                // encodes 4 KiB as 1 here, and this kernel says
+                                // nothing because it has no MMU to say it about.
+                                // Bit 3 clear: place the image at text_offset
+                                // from the base of usable RAM, not anywhere.
+        ".quad 0",              // res2
+        ".quad 0",              // res3
+        ".quad 0",              // res4
+        ".ascii \"ARM\\x64\"",  // magic, at offset 56. The loader checks these
+                                // four bytes and nothing else identifies the
+                                // format.
+        ".word 0",              // res5: PE/COFF header offset. There is no EFI
+                                // stub, so zero.
+        "9:",
+
         // Mask D, A, I and F before anything else.
         "msr  daifset, #0xf",
 
@@ -125,12 +166,24 @@ unsafe extern "C" fn _start() -> ! {
 /// control flow, which has exactly one path here, and not of a runtime guard
 /// that would itself be a global.
 ///
+/// `_dtb` is `x0` as the loader left it: the physical address of a device tree
+/// blob when this binary was booted as a flat `Image`, and zero when it was
+/// booted as an ELF. **It is carried and dropped.** Nothing dereferences it,
+/// stores it, compares it against a constant or passes it on, and nothing may
+/// until `ci/` boots the flat image — a kernel that rejected `x0 == 0` here
+/// would fail the gate's ELF boot, where zero is the correct value. The
+/// underscore is that state, not a suppressed warning; the parameter exists now
+/// so the ABI stops changing once it has a reader. RFC-0003 section 8, step 1.
+///
+/// A `u64` and not a pointer: no address arrives in Rust's type system before
+/// anything is entitled to follow it.
+///
 /// # Safety
 ///
 /// Reached only from `_start`, exactly once, at EL1, with interrupts masked, a
 /// valid stack and a zeroed `.bss`. It mints device tokens, which is sound only
 /// because there is exactly one call site.
-unsafe extern "C" fn boot_rust() -> ! {
+unsafe extern "C" fn boot_rust(_dtb: u64) -> ! {
     let resources = BootResources {
         // SAFETY: single call site, reached once, before any other code has
         // touched the PL011. `UART0_BASE` is the platform console's MMIO base.

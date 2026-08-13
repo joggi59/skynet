@@ -11,11 +11,22 @@
  * beneath it that faults, so the only question is what it destroys first.
  * Everything the failure path needs is placed BELOW everything it does not:
  *
- *     .vectors  .guard  .failpath  .rodata  .text  .got  .data  .bss  .stack
+ *     .text.boot  .vectors  .guard  .failpath  .rodata  .text  .got  .data
+ *     .bss  .stack
  *
  * Code before the data it reads, because destroying an instruction raises an
  * exception promptly while destroying a jump-table entry can turn a branch into
  * a loop on itself that raises nothing at all.
+ *
+ * `.text.boot` is the one section here that is NOT placed by that reasoning, and
+ * it is placed lower than everything the failure path needs. It holds `_start`,
+ * whose first 64 bytes are the aarch64 Linux boot protocol's image header, and
+ * the loader reads that header at offset 0 of the flat image — which is
+ * KERNEL_BASE, the address `.vectors` would otherwise occupy. The ASSERT below
+ * pins it there. Being lowest costs the ordering nothing: `_start` runs once,
+ * before a stack exists, and is unreachable afterwards, so a descending stack
+ * that reached it would have destroyed the vector table first and there would be
+ * nothing left to report with.
  *
  * WHICH of those orderings is enforced is not summarised here. Read the ASSERTs.
  *
@@ -76,12 +87,45 @@ KERNEL_BASE = 0x40080000;   /* QEMU virt RAM base + 512 KiB.
                              * places in guest memory for an ELF `-kernel`.
                              * Established by T-0006's first acceptance
                              * criterion, which released the task rather than
-                             * work around it. Ledger, event `correction`. */
+                             * work around it. Ledger, event `correction`.
+                             *
+                             * For a Linux-format `Image` the blob IS placed, and
+                             * not below the kernel: the loader puts it at the
+                             * RAM base plus min(half the RAM, 128 MiB), so it
+                             * moves with the machine's size and no constant here
+                             * or in the kernel may name it. It arrives in `x0`
+                             * instead. RFC-0003 section 1a measured six
+                             * different addresses from one binary. */
 STACK_SIZE  = 0x10000;      /* 64 KiB */
 
 SECTIONS
 {
     . = KERNEL_BASE;
+
+    /* `_start`, and nothing else. Its own output section for one reason: the
+     * first 64 bytes of `_start` are the boot protocol's image header, which the
+     * loader reads at offset 0 of the flat image. Left inside `.text` it would
+     * sit above `.vectors`, and byte 56 of the image — where the loader checks
+     * for `ARM\x64` — would be four bytes of vector entry 0.
+     *
+     * KEEP because nothing calls `_start`: --gc-sections would take it and leave
+     * an image whose first bytes are whatever landed there instead.
+     *
+     * The cost is the gap this opens below `.vectors`, which the 2 KiB alignment
+     * turns into fill in the flat image. It is a real cost, it is stated in the
+     * contribution that added it, and it is the price of the ordering above: no
+     * other section may be placed in the gap without reversing one of the
+     * ASSERTs that keep the failure path below the code it reports on. */
+    .text.boot : ALIGN(8) { KEEP(*(.text.boot)) }
+
+    /* Not an ordering, which is what every other ASSERT in this file holds. The
+     * loader does not search for the header; it reads offset 0. An `.text.boot`
+     * that is merely BELOW `.vectors` is not enough, and a `<` here would pass
+     * for any gap at all. */
+    ASSERT(ADDR(.text.boot) == KERNEL_BASE,
+           "_start is not at KERNEL_BASE: the image header is not at offset 0 of the flat image and the loader will reject or mis-place the kernel")
+    ASSERT(SIZEOF(.text.boot) >= 64,
+           "the boot section is smaller than the image header it must contain")
 
     /* KEEP: reached only by the processor taking an exception, so --gc-sections
      * would remove it. Named `.vectors`, not `.text.vectors`, or `.text`'s
@@ -153,11 +197,10 @@ SECTIONS
 
     .rodata : ALIGN(8) { *(.rodata .rodata.*) }
 
+    /* `.text.boot` is claimed by the output section of the same name above, so
+     * the wildcard here never sees it. Order of output sections is what decides
+     * that, not the wildcard's shape. */
     .text : ALIGN(8) {
-        /* KEEP so _start survives --gc-sections. It need not sit at
-         * KERNEL_BASE: -kernel loads an ELF by program headers and jumps to
-         * e_entry. */
-        KEEP(*(.text.boot))
         *(.text .text.*)
     }
 
@@ -277,6 +320,16 @@ SECTIONS
     }
 
     __kernel_end = .;
+
+    /* The boot protocol's `image_size`, read out of the header by the loader:
+     * how much memory the kernel occupies, not how long its file is. It includes
+     * .bss and the 64 KiB stack, which are in neither. Defined from the symbol
+     * rather than from a number so that moving anything above moves it too.
+     *
+     * It must be non-zero or the loader ignores text_offset and places the image
+     * wherever it likes. Nothing asserts that here because nothing can make it
+     * zero: __kernel_end is above KERNEL_BASE by at least the stack. */
+    __image_size = __kernel_end - KERNEL_BASE;
 
     ASSERT(__stack_top == __kernel_end,
            "something is placed above the stack: it is no longer the highest section, and an orphan there inflates the image while the size budget still reports PASS")

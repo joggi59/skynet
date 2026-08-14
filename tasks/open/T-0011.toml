@@ -7,8 +7,16 @@ objective = "0002"      # Objective 0002's SECOND success criterion, completed:
                         # which of it is already spoken for, from the device tree
                         # rather than from constants." T-0010 built the reader.
                         # This is where it reads a real machine.
-state = "blocked"
-blocked_on = "RFC-0003 section 8 step 2 — the four ci/ changes, which belong to the orchestrator and to nobody else. Until ci/boot-test.sh boots the flat image, x0 is zero on the gate's machine and this kernel correctly reports SKYNET_MEM_FAIL and no boot marker, forever. Claiming this before then produces a red gate for a reason that is not the patch's."
+state = "open"
+unblocked_on = """
+RFC-0003 section 8 step 2 landed as 6ca2296, b7ad224, ab1a7fd and 490def8. The
+condition this task named is measured gone rather than assumed gone: ci/boot-test.sh
+passes kernel_image() to -kernel (line 105) and refuses a stale image (line 114), and
+on that exact path, halted at *0x40080000 before the first instruction, x0 reads
+0x44000000 at -m 128M with 0xedfe0dd0 at that address. Twelve RAM sizes were measured
+when the contract was rewritten: the address is ram_base + min(ram_size/2, 128 MiB)
+rounded up to 2 MiB, capped, and is NOT fixed — no kernel may hardcode it.
+"""
 estimated_difficulty = "medium"
 profile = "standard"
 depends_on = ["T-0009", "T-0010"]

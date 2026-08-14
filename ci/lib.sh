@@ -13,6 +13,20 @@
 # PENDING is never reported as PASS. An invariant we cannot enforce yet is an
 # invariant we are not enforcing, and saying otherwise would make the whole
 # apparatus a decoration. See CONSTITUTION.md.
+#
+# Exit codes, which are the same statement made to a caller that reads no text:
+#
+#   0  something was measured and nothing failed
+#   1  something was measured and something failed
+#   2  usage or environment error (`die`)
+#   3  NOTHING WAS MEASURED — every check reported PENDING or SKIP
+#
+# 3 exists because 0 was answering two different questions. `ci/build.sh --all`
+# with no bare-metal target, and `ci/boot-test.sh` on an unbuilt tree, both
+# printed only PENDING and exited 0; two judges reported runs that looked clean
+# and had measured nothing at all. The gate is unaffected either way — it counts
+# PASS/FAIL/PENDING lines and refuses on PENDING, it does not read exit codes —
+# so this is entirely about a standalone run being honest to a human or a shell.
 
 set -uo pipefail
 
@@ -69,10 +83,17 @@ heading() { printf '\n%s%s%s\n' "$C_BOLD" "$*" "$C_RESET"; }
 
 die() { printf '%sERROR%s    %s\n' "$C_FAIL" "$C_RESET" "$*" >&2; exit 2; }
 
-# Summary line. Returns 1 if anything failed, 0 otherwise.
+# Summary line. Returns 1 if anything failed, 3 if nothing was measured, else 0.
+#
 # PENDING never fails a run on its own — but the gate refuses to merge a
 # contribution whose milestone-relevant checks are pending, which is where that
 # distinction is enforced.
+#
+# "Nothing was measured" is zero PASS and zero FAIL. Not "some check is
+# pending": ci/constitution-check.sh has four permanently pending invariants by
+# design and must keep exiting 0 while the rest of it passes. The distinction
+# that matters is between a run that produced evidence and a run that produced
+# none, and only the second is a run whose green cannot be believed.
 summary() {
     printf '\n%s%s%s\n' "$C_BOLD" "──────────────────────────────────────────" "$C_RESET"
     printf '%s %d passed' "${1:-checks}" "$CHECKS_PASS"
@@ -80,7 +101,13 @@ summary() {
     [ "$CHECKS_PENDING" -gt 0 ] && printf ', %s%d pending%s'   "$C_PEND" "$CHECKS_PENDING" "$C_RESET"
     [ "$CHECKS_SKIP"    -gt 0 ] && printf ', %s%d skipped%s'   "$C_SKIP" "$CHECKS_SKIP" "$C_RESET"
     printf '\n'
-    [ "$CHECKS_FAIL" -eq 0 ]
+    [ "$CHECKS_FAIL" -eq 0 ] || return 1
+    if [ "$CHECKS_PASS" -eq 0 ]; then
+        printf '%sNOTHING MEASURED%s  no check produced evidence; exit 3, not 0\n' \
+            "$C_PEND" "$C_RESET"
+        return 3
+    fi
+    return 0
 }
 
 # --- TOML access -----------------------------------------------------------
@@ -230,7 +257,67 @@ _marker_check() {
 }
 _marker_check
 
+# --- The two artefacts ------------------------------------------------------
+#
+# One build produces two files and they are not interchangeable:
+#
+#   kernel_binary()  the ELF. Symbols, sections, debug info. What gdb, nm and
+#                    readelf need, and what objcopy reads FROM.
+#   kernel_image()   the flat Linux-format `Image`. What QEMU is given at
+#                    -kernel, and what the size budget is measured against —
+#                    debug info and symbol tables are not shipped to a device,
+#                    so measuring them would flatter the number.
+#
+# Which one goes where is load-bearing rather than a detail. QEMU treats an ELF
+# as non-Linux: it never writes the bootloader stub, so every register is zero
+# at entry and no device tree is placed anywhere in RAM. Given the flat image it
+# does write the stub, and `x0` is a device tree pointer. RFC-0003 section 1a
+# measured both, from the same source, and section 8 assigns this split.
+
+# Where cargo actually put it.
+#
+# Not a constant `kernel/target`: CARGO_TARGET_DIR in the environment moves the
+# output and this function used to ignore it, so on a clean tree build.sh
+# reported "cargo reported success but <path> does not exist" — and on a tree
+# that had been built once before, something worse, a PASS naming a stale ELF
+# from an earlier build while the one just produced sat elsewhere unexamined.
+#
+# A relative CARGO_TARGET_DIR resolves against the directory cargo is invoked
+# from, and every script here `cd`s to REPO_ROOT first. Measured, not assumed.
+kernel_target_dir() {
+    local d="${CARGO_TARGET_DIR:-}"
+    case "$d" in
+        "") echo "$REPO_ROOT/kernel/target" ;;
+        /*) echo "$d" ;;
+        *)  echo "$REPO_ROOT/$d" ;;
+    esac
+}
+
 kernel_binary() {
     local target; target="$(profile_target)"
-    echo "$REPO_ROOT/kernel/target/$target/release/skynet-kernel"
+    echo "$(kernel_target_dir)/$target/release/skynet-kernel"
+}
+
+# The flat image, at the path ci/build.sh writes it to.
+#
+# Per profile, because the budget it is measured against is per profile and two
+# profiles must not overwrite each other's artefact.
+kernel_image() {
+    echo "$REPO_ROOT/ci/.out/kernel-$(active_profile).bin"
+}
+
+# Is the flat image older than the ELF it is derived from?
+#
+# True also when it does not exist. This is the hazard the RFC names for the
+# path itself — "a boot test that read that path today would boot whatever the
+# last --size left there" — and moving the objcopy into the build step does not
+# by itself close it: a tree built before this change, or a `cargo build` run by
+# hand, leaves an ELF newer than the .bin and nothing would say so. Anything
+# that consumes the flat image asks this first and reports rather than measures.
+kernel_image_stale() {
+    local elf img
+    elf="$(kernel_binary)"; img="$(kernel_image)"
+    [ -f "$img" ] || return 0
+    [ -f "$elf" ] || return 1
+    [ "$elf" -nt "$img" ]
 }

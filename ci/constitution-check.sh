@@ -298,7 +298,25 @@ PY
         return
     fi
 
-    pass "kernel dependency tree is empty (manifest scanned at every depth, lock resolves 1)"
+    # The pass line states its own scope, and the reason is a measurement.
+    #
+    # A judge planted `use std::collections::HashMap;` in a `#[cfg(test)]` module
+    # in kernel/src/fdt.rs. It built, `cargo test` ran it, and this check passed.
+    # The check was RIGHT — nothing under cfg(test) is compiled into the image,
+    # any more than build.rs's use of std is, and invariant 7 is about what the
+    # kernel links, not about what a host test imports. But the line it printed
+    # said "kernel dependency tree is empty", which a reader takes as a statement
+    # about the whole tree, and this check has never opened a source file.
+    #
+    # An over-claiming PASS is the same defect as a fail-open one step later: the
+    # next person to ask "does anything check that?" reads this line, believes it
+    # covers more than it does, and stops looking. So the claim is now exactly
+    # the size of the evidence.
+    pass "kernel declares no dependency, in any manifest table at any depth, and Cargo.lock resolves 1 package"
+    detail "scope: DECLARED dependencies only — kernel/Cargo.toml and kernel/Cargo.lock"
+    detail "this check does not read source. A 'use std::...' under #[cfg(test)] or in build.rs"
+    detail "compiles for the host, is not linked into the image, and is neither seen here nor a"
+    detail "violation of invariant 7. What reaches the image is bounded by the build, not by this"
 }
 
 # ---------------------------------------------------------------------------
@@ -453,6 +471,30 @@ check_minting_sites() {
 # it — see the note in the loop below.
 LEAK_BASELINE_DATE="2026-08-05T09:30:03+04:00"
 
+# AUTHOR date, and this is the whole fix.
+#
+# `git log --until=` and `--since=` resolve against the COMMITTER date. A plain
+# `git rebase` rewrites committer dates to now and leaves author dates alone, so
+# rebasing a branch onto main moved five commits from the "predates the baseline,
+# reported" side to the "past the baseline, failed" side — without changing one
+# character of what any of them said. The check written to REPORT history failed
+# it instead, and the two dishonest ways out of that are the two the comment
+# below names: hold the rule, or rewrite the messages.
+#
+# Author dates survive a rebase. That is the property the baseline needs and the
+# one it was not using. Commits are partitioned here by `%at` against this epoch
+# rather than by delegating a range to git, because git has no author-date
+# equivalent of --since.
+#
+# Compared as integers, not as strings: the baseline carries a +04:00 offset and
+# a commit may carry any other, so lexical comparison of ISO-8601 is wrong by up
+# to a day at the boundary.
+if ! LEAK_BASELINE_EPOCH=$(date -d "$LEAK_BASELINE_DATE" +%s 2>/dev/null); then
+    die "cannot parse LEAK_BASELINE_DATE '$LEAK_BASELINE_DATE' — the baseline is
+         what separates history from a violation, and a check that cannot place
+         it must not run at all"
+fi
+
 check_panel_leak() {
     heading "No judge named beside a verdict in a contribution's own artefacts"
 
@@ -585,30 +627,66 @@ for q in mentioned:
     #
     #    So the rule binds forward. Older messages are reported and do not fail;
     #    they are history, and history is not editable here.
+    # The messages of a set of commits, unwrapped one paragraph per commit.
+    #
+    # Joined into paragraphs before matching, not read line by line.
+    #
+    # A judge found "Two judges found it independently" sitting past the
+    # baseline and green, because the role word and the verdict word landed
+    # on either side of a line break and both greps are per-line. Three
+    # earlier misses have the same cause. Prose wraps; the rule is about the
+    # sentence, so the text is unwrapped before the rule is applied.
+    #
+    # `--no-walk` because the argument is an explicit list of commits chosen by
+    # author date, not a range: without it git would walk their ancestry and
+    # drag the whole branch back in, baseline and all. With no commits at all it
+    # must print nothing rather than fall back to HEAD, which is what the guard
+    # is for.
+    _leak_messages() {
+        [ -n "$1" ] || return 0
+        git log --no-walk=unsorted --format='%h %s%n%b%n@@' $1 2>/dev/null \
+            | awk '{ if ($0=="@@") { print buf; buf="" } else { buf = buf " " $0 } } END { print buf }'
+    }
+
     local br
     for br in $(git for-each-ref --format='%(refname:short)' 'refs/heads/task/*' 2>/dev/null); do
+        # Partitioned by AUTHOR date. See LEAK_BASELINE_EPOCH above: `--until`
+        # and `--since` would partition by committer date, and a rebase moves
+        # every commit on this branch to the wrong side of that line.
+        local before after
+        before=$(git log --format='%H %at' "main..$br" 2>/dev/null \
+                 | awk -v b="$LEAK_BASELINE_EPOCH" '$2 <  b { print $1 }')
+        after=$(git log --format='%H %at' "main..$br" 2>/dev/null \
+                | awk -v b="$LEAK_BASELINE_EPOCH" '$2 >= b { print $1 }')
+
+        # Extracted ONCE and matched twice, not extracted twice.
+        #
+        # Both patterns run over the same text, and _strip_mentions appends a
+        # line to the exemption file for every span it removes — so running it
+        # per pattern counted each quoted span twice. Measured: three quoted
+        # attributions in one commit message were announced as "6 quoted
+        # span(s)" and then listed six times, three of them the same three. The
+        # listing agreed with the count and both were wrong, which is the worse
+        # of the two failure modes: nothing looks inconsistent.
+        local old_text after_text
+        old_text=$(_leak_messages "$before")
+        after_text=$(_leak_messages "$after" | _strip_mentions 2>>"$_leak_mentions")
+
         local old
-        old=$(git log --until="$LEAK_BASELINE_DATE" --format='%h %s%n%b' "main..$br" 2>/dev/null \
-              | grep -niE "($judges)" | grep -iE "($verdicts)" || true)
+        old=$(printf '%s\n' "$old_text" | grep -niE "($judges)" | grep -iE "($verdicts)" || true)
+        old="$old
+$(printf '%s\n' "$old_text" | grep -niE "($selfstanding)" || true)"
+        old=$(printf '%s\n' "$old" | grep -v '^$' || true)
         if [ -n "$old" ]; then
             local n; n=$(printf '%s\n' "$old" | grep -c . || true)
-            info "$br: $n line(s) predate LEAK_BASELINE — reported, not failed"
+            info "$br: $n line(s) authored before LEAK_BASELINE — reported, not failed"
+            info "     history is not editable here; a rebase moves committer dates and must not move this"
         fi
+
         local msgs
-        # Joined into paragraphs before matching, not read line by line.
-        #
-        # A judge found "Two judges found it independently" sitting past the
-        # baseline and green, because the role word and the verdict word landed
-        # on either side of a line break and both greps are per-line. Three
-        # earlier misses have the same cause. Prose wraps; the rule is about the
-        # sentence, so the text is unwrapped before the rule is applied.
-        msgs=$(git log --since="$LEAK_BASELINE_DATE" --format='%h %s%n%b%n@@' "main..$br" 2>/dev/null \
-               | awk '{ if ($0=="@@") { print buf; buf="" } else { buf = buf " " $0 } } END { print buf }' \
-               | _strip_mentions 2>>"$_leak_mentions" | grep -niE "($judges)" | grep -iE "($verdicts)" || true)
+        msgs=$(printf '%s\n' "$after_text" | grep -niE "($judges)" | grep -iE "($verdicts)" || true)
         msgs="$msgs
-$(git log --since="$LEAK_BASELINE_DATE" --format='%h %s%n%b%n@@' "main..$br" 2>/dev/null \
-  | awk '{ if ($0=="@@") { print buf; buf="" } else { buf = buf " " $0 } } END { print buf }' \
-  | _strip_mentions 2>>"$_leak_mentions" | grep -niE "($selfstanding)" || true)"
+$(printf '%s\n' "$after_text" | grep -niE "($selfstanding)" || true)"
         msgs=$(printf '%s\n' "$msgs" | grep -v '^$' || true)
         [ -n "$msgs" ] || continue
         fail "commit messages on $br name a judge beside a verdict"
@@ -616,7 +694,20 @@ $(git log --since="$LEAK_BASELINE_DATE" --format='%h %s%n%b%n@@' "main..$br" 2>/
         found=1
     done
 
-    local _mentions; _mentions=$(grep -c . "$_leak_mentions" 2>/dev/null || echo 0)
+    # `wc -l`, not `grep -c . || echo 0`.
+    #
+    # On an EMPTY file — the ordinary case, every clean run — `grep -c .` prints
+    # `0` and exits 1, so `|| echo 0` appended a second line and the substitution
+    # was the three bytes "0\n0". `[ "0\n0" -gt 0 ]` is not false, it is an
+    # error: bash printed "integer expression expected" on stderr and returned 2,
+    # which happens to take the same branch as false, so the outcome was right
+    # and the idiom was not. A check that prints a shell error on every clean run
+    # trains its readers to ignore its stderr, and its stderr is where the
+    # mention stripper shouts when it cannot run.
+    #
+    # _strip_mentions writes exactly one line per exempted span, and the regex it
+    # matches cannot span a newline, so a line count is the count.
+    local _mentions; _mentions=$(wc -l < "$_leak_mentions" 2>/dev/null) || _mentions=0
     if [ "${_mentions:-0}" -gt 0 ]; then
         info "$_mentions quoted span(s) exempted as mentions — an unread exemption is how every fail-open here began"
         # Every exemption, or the count of what is being withheld and why.

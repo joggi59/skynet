@@ -4,7 +4,12 @@
 
 use core::arch::naked_asm;
 
-use crate::hal::BootResources;
+use crate::hal::{BootResources, Console, MemoryMap, Power};
+
+// `skynet_kernel::fdt` and not `crate::fdt`: `main.rs` binds only `hal` at the
+// crate root, and `main.rs` is not this task's to edit. Both names reach the
+// same library module.
+use skynet_kernel::fdt;
 
 use super::pl011::BootConsole;
 use super::platform;
@@ -15,17 +20,20 @@ use super::psci::PowerControl;
 /// Entry is at EL1: `virt` defaults to `virtualization=off`, so no EL2 exists.
 ///
 /// **The same binary boots two ways, and `x0` differs between them.** Booted as
-/// an ELF — which is what `ci/boot-test.sh` does today — QEMU treats the image
-/// as non-Linux, writes no bootloader stub, places no device tree, and resets
-/// every general-purpose register: `x0` is zero. Booted as a flat Linux-format
+/// an ELF — which `ci/boot-test.sh` no longer does — QEMU treats the image as
+/// non-Linux, writes no bootloader stub, places no device tree, and resets every
+/// general-purpose register: `x0` is zero, and `boot_rust` now reports that as
+/// its own failure rather than ignoring it. Booted as a flat Linux-format
 /// `Image`, the loader places the blob and `x0` holds its physical address,
 /// which moves with the machine's RAM size. RFC-0003 section 1a measured six
 /// different addresses from one binary, and RFC-0001's O-2 is answered by
 /// changing the artefact rather than the contract.
 ///
-/// Nothing here reads `x0`, or may: validating it would fail the ELF boot, where
-/// zero is correct. `_start` touches only `x9`–`x12` and ends in a tail branch,
-/// so whatever the loader left in `x0` reaches `boot_rust` untouched.
+/// Nothing here reads `x0`, and nothing here should: this is the one register
+/// the kernel did not choose, and every decision taken about it belongs where it
+/// can be made in Rust with a failure path to report on. `_start` touches only
+/// `x9`–`x12` and ends in a tail branch, so whatever the loader left in `x0`
+/// reaches `boot_rust` untouched.
 ///
 /// # Safety
 ///
@@ -166,24 +174,25 @@ unsafe extern "C" fn _start() -> ! {
 /// control flow, which has exactly one path here, and not of a runtime guard
 /// that would itself be a global.
 ///
-/// `_dtb` is `x0` as the loader left it: the physical address of a device tree
+/// `dtb` is `x0` as the loader left it: the physical address of a device tree
 /// blob when this binary was booted as a flat `Image`, and zero when it was
-/// booted as an ELF. **It is carried and dropped.** Nothing dereferences it,
-/// stores it, compares it against a constant or passes it on, and nothing may
-/// until `ci/` boots the flat image — a kernel that rejected `x0 == 0` here
-/// would fail the gate's ELF boot, where zero is the correct value. The
-/// underscore is that state, not a suppressed warning; the parameter exists now
-/// so the ABI stops changing once it has a reader. RFC-0003 section 8, step 1.
+/// booted as an ELF. It is the one input this kernel did not choose, and until
+/// [`blob_at`] has finished with it, it is an integer and not an address — which
+/// is why the parameter is a `u64`. Nothing in Rust's type system is entitled to
+/// follow it before then.
 ///
-/// A `u64` and not a pointer: no address arrives in Rust's type system before
-/// anything is entitled to follow it.
+/// The order is RFC-0003 section 5's and no other: mint the two devices, turn
+/// `x0` into a bounded window of bytes, parse it. A failure anywhere in that
+/// sequence writes `SKYNET_MEM_FAIL` and one compile-time reason, and powers the
+/// machine off — before the boot marker, so the gate fails on the absent marker
+/// while the console says why.
 ///
 /// # Safety
 ///
 /// Reached only from `_start`, exactly once, at EL1, with interrupts masked, a
 /// valid stack and a zeroed `.bss`. It mints device tokens, which is sound only
 /// because there is exactly one call site.
-unsafe extern "C" fn boot_rust(_dtb: u64) -> ! {
+unsafe extern "C" fn boot_rust(dtb: u64) -> ! {
     let resources = BootResources {
         // SAFETY: single call site, reached once, before any other code has
         // touched the PL011. `UART0_BASE` is the platform console's MMIO base.
@@ -193,5 +202,259 @@ unsafe extern "C" fn boot_rust(_dtb: u64) -> ! {
         // HVC. Any other exception level parked and never reached here.
         power: unsafe { PowerControl::new() },
     };
+
+    // Parsed and dropped. The allocator that reads it is T-0007's, where
+    // RFC-0003 section 5 puts the third field of `BootResources` and where
+    // RFC-0001's argument about that struct becoming a registry is re-checked.
+    // Binding it rather than discarding it is the honest shape: the value
+    // exists, it has no consumer yet, and no `#[allow]` or placeholder reader
+    // pretends otherwise.
+    //
+    // One consequence worth stating, because it is invisible: with the map
+    // unobserved, nothing but the error paths of `fdt::parse` is load-bearing in
+    // this build, and the optimiser is entitled to discard the work of filling a
+    // value nobody reads. What the failure path reports is unaffected — every
+    // check still runs, because its result is observed here.
+    let _map: MemoryMap = match memory_map(dtb) {
+        Ok(map) => map,
+        Err(reason) => mem_fail(resources, reason),
+    };
+
     crate::kernel_main(resources)
+}
+
+/// One of a fixed set of compile-time strings. Never a value read from the blob.
+///
+/// The same `&'static [u8]` the panic path takes, for the same reason: invariant
+/// 5 is about what the kernel can be made to say, and a type that only accepts
+/// program text cannot be handed a fact about the operator's machine. CI does
+/// not check this until M6; the bound is what carries it until then.
+type Reason = &'static [u8];
+
+/// `x0` was zero. Its own reason, and deliberately not "bad magic".
+///
+/// It means the kernel was booted as an ELF — QEMU places no blob and zeroes
+/// every register — which is a misconfiguration in `ci/`, not a corrupt tree.
+/// Reporting it as bad magic sends whoever reads the console to the wrong file.
+const NO_BLOB: Reason = b"x0 was zero: booted as an ELF, no device tree was placed";
+
+/// The blob's address is not 8-byte aligned, which the boot protocol requires.
+///
+/// It is also load-bearing here rather than pedantry: the reservation block is
+/// `u64` pairs, the MMU is off so every access is Device-nGnRnE, and the target
+/// is built `+strict-align`.
+const MISALIGNED: Reason = b"device tree address is not 8-byte aligned";
+
+/// `x0`, or `x0 + totalsize`, does not fit in a 64-bit address.
+///
+/// Reached only from a value no loader would produce, and reported rather than
+/// wrapped: `overflow-checks = true`, so an unchecked add here would be a panic,
+/// and `SKYNET_PANIC` is the marker that means the kernel has a bug rather than
+/// that its input was garbage.
+const ADDRESS_SPACE: Reason = b"device tree window runs past the end of the address space";
+
+/// `totalsize` is above [`fdt::MAX_BLOB_LEN`].
+///
+/// Checked here as well as in the parser because it is the bound on the window
+/// this file constructs, so it has to hold before the slice exists rather than
+/// after. The parser's own [`fdt::Error::TotalSizeTooLarge`] maps to this same
+/// string: it is the same diagnosis, and the second check is defence in depth.
+const TOO_LARGE: Reason = b"device tree totalsize is above the blob size bound";
+
+/// Byte offset of `totalsize` in `fdt_header`.
+///
+/// The whole of what this file knows about the device tree format, and it is
+/// here under protest: the boot path cannot ask the parser for the length of a
+/// window that does not exist yet, so the one field that sizes the window has to
+/// be read before the portable code takes over. Everything else about the
+/// header — magic, the version pair, every offset and every extent — is checked
+/// by `fdt::parse` against the slice, before it reads a byte of the structure
+/// block. Devicetree Specification v0.4 section 5.2 puts `totalsize` second.
+const TOTALSIZE_OFFSET: u64 = 4;
+
+/// The width of that field. It is a big-endian `u32`, like every header field.
+const TOTALSIZE_LEN: u64 = 4;
+
+/// Turn `x0` into a memory map, or into the reason it could not become one.
+fn memory_map(dtb: u64) -> Result<MemoryMap, Reason> {
+    let blob = blob_at(dtb)?;
+    fdt::parse(blob).map_err(reason_for)
+}
+
+/// Turn a raw physical address into a bounded window of bytes.
+///
+/// **This is where the kernel first trusts something it did not write**, and the
+/// order below is the whole of the argument for why that is survivable.
+///
+/// The parser is hardened against hostile bytes, but every test that proved it
+/// so handed it a slice that already existed. Here the slice has to be built,
+/// and its length comes from a field inside the very blob whose validity is in
+/// question. So the sequence is: reject the addresses that cannot be followed at
+/// all; read exactly the four bytes that give the length, and nothing else;
+/// bound that length against a compile-time ceiling before it is used as a
+/// length; construct the window once; hand it to the parser, which re-checks the
+/// header it can now see in full.
+///
+/// Two properties are worth naming because they are what make the double read of
+/// `totalsize` — once here, once in `fdt::parse` — harmless rather than a
+/// time-of-check hazard:
+///
+///   - the window's length is fixed by the read taken *here*, so nothing the
+///     second read returns can widen it;
+///   - the parser compares its own reading of `totalsize` against the slice it
+///     was given, so a second reading that is larger is
+///     [`fdt::Error::TotalSizeBeyondBlob`] and not an over-read.
+///
+/// What cannot be checked, and is not: whether `[dtb, dtb + totalsize)` is
+/// memory at all. Knowing where RAM is, is what the blob is for, and a range
+/// check against a constant would be the fallback constant RFC-0003 section 1
+/// refuses, wearing a different hat. With the MMU off, an address that is not
+/// memory raises a synchronous external abort, which the vector table reports as
+/// `SKYNET_FAULT` and shuts down cleanly — measured in RFC-0003 section 1a, and
+/// the fault path RFC-0002 built doing the job it was built for.
+fn blob_at(dtb: u64) -> Result<&'static [u8], Reason> {
+    if dtb == 0 {
+        return Err(NO_BLOB);
+    }
+    if !dtb.is_multiple_of(8) {
+        return Err(MISALIGNED);
+    }
+
+    // The only bytes read before the window exists: `[dtb + 4, dtb + 8)`. Both
+    // ends are checked against the address space first, because
+    // `overflow-checks = true` turns the alternative into a panic.
+    let field = match dtb.checked_add(TOTALSIZE_OFFSET) {
+        Some(field) => field,
+        None => return Err(ADDRESS_SPACE),
+    };
+    if field.checked_add(TOTALSIZE_LEN).is_none() {
+        return Err(ADDRESS_SPACE);
+    }
+
+    // SAFETY: `field` is `dtb + 4`, which is 4-byte aligned because `dtb` was
+    // just proved to be 8-byte aligned, and does not wrap because both ends were
+    // just checked — so this is a single naturally aligned 4-byte load, which is
+    // what Device-nGnRnE memory permits and what `+strict-align` requires.
+    // Volatile, and one access rather than a plain load, for the same reason:
+    // the compiler may not split, merge or duplicate a read of memory it knows
+    // nothing about, and gathering is architecturally prohibited on this memory
+    // type. Whether the address is memory at all cannot be established here —
+    // see this function's doc comment; the outcome if it is not is a synchronous
+    // external abort reported by the vector table, not a silent wrong answer.
+    let raw = unsafe { core::ptr::read_volatile(field as *const u32) };
+    // The blob is big-endian whatever the CPU is. Read as a native word and
+    // swapped, rather than cast through a typed pointer at an unproved
+    // alignment, which is the same discipline `fdt.rs` applies to every field.
+    let totalsize = u32::from_be(raw) as u64;
+
+    // A length, at last — and bounded before it is used as one. `MAX_BLOB_LEN`
+    // is portable and lives with the parser, because it is a statement about how
+    // much input this kernel is willing to read and not a fact about a board.
+    if totalsize > fdt::MAX_BLOB_LEN {
+        return Err(TOO_LARGE);
+    }
+    if dtb.checked_add(totalsize).is_none() {
+        return Err(ADDRESS_SPACE);
+    }
+
+    // SAFETY: the one construction site, and the only place in this kernel where
+    // a slice is made out of memory the kernel does not own.
+    //
+    // Soundness, clause by clause:
+    //
+    //   - non-null and aligned: `dtb != 0` and `dtb % 8 == 0` were checked
+    //     above, and `[u8]` needs alignment 1 in any case;
+    //   - the length is not the blob's opinion of itself: it was proved
+    //     `<= MAX_BLOB_LEN` (2 MiB) before this line, so it is far below
+    //     `isize::MAX` and `as usize` is exact on this target;
+    //   - the window does not wrap: `dtb + totalsize` was proved representable;
+    //   - no aliasing and no mutation for the lifetime of the borrow. This is a
+    //     shared reference and nothing here takes a mutable one. The kernel
+    //     writes nothing to physical memory outside its own image at M1 — there
+    //     is no allocator yet, which is precisely what this map is for — and it
+    //     is single-core with interrupts masked and no DMA engine running, so
+    //     there is no other writer to race with.
+    //
+    // Why `&'static` is defensible over memory the kernel does not own. The
+    // lifetime is a claim about how long the bytes stay valid, and it is true
+    // for a stronger reason than usual: the region was installed by the loader
+    // at machine reset, nothing in this kernel can free, move or reuse it, and
+    // `boot_rust` never returns, so no code that could invalidate it will ever
+    // run. `'static` also costs nothing that could be spent elsewhere — the
+    // borrow does not escape `memory_map`, because `fdt::parse` copies what it
+    // needs into a `MemoryMap` and retains no reference to the blob.
+    //
+    // What this does NOT claim is that the window is memory. It cannot; see the
+    // doc comment above. Rust's model has no vocabulary for a region a
+    // bootloader placed, and the honest statement is that soundness here rests
+    // on the boot protocol's promise plus the checks above, with a synchronous
+    // external abort as the backstop when the promise is broken.
+    Ok(unsafe { core::slice::from_raw_parts(dtb as *const u8, totalsize as usize) })
+}
+
+/// The parser's diagnosis, as one of a fixed set of strings.
+///
+/// One string per variant rather than "the blob is bad": `fdt::Error` was given
+/// twenty-nine variants specifically so that this function could exist, and a
+/// console that says "the reservation block never terminates" sends the reader
+/// to one place instead of to all of them. Every arm is program text, so the
+/// exhaustive match is also the enumeration — adding a variant to `fdt::Error`
+/// fails to compile until someone decides what the console should say about it.
+fn reason_for(err: fdt::Error) -> Reason {
+    match err {
+        fdt::Error::HeaderTruncated => b"blob is shorter than a 40-byte header",
+        fdt::Error::BadMagic => b"magic is not d00dfeed",
+        fdt::Error::TotalSizeTooSmall => b"totalsize is below the header length",
+        fdt::Error::TotalSizeTooLarge => TOO_LARGE,
+        fdt::Error::TotalSizeBeyondBlob => b"totalsize is beyond the window x0 named",
+        fdt::Error::UnsupportedVersion => b"version is below 17",
+        fdt::Error::UnsupportedCompatibleVersion => b"last_comp_version is above 17",
+        fdt::Error::MisalignedStructBlock => b"off_dt_struct is not 4-byte aligned",
+        fdt::Error::MisalignedReservations => b"off_mem_rsvmap is not 8-byte aligned",
+        fdt::Error::StructBlockOutOfBounds => b"structure block runs past totalsize",
+        fdt::Error::StringsBlockOutOfBounds => b"strings block runs past totalsize",
+        fdt::Error::ReservationsOutOfBounds => b"reservation block runs past totalsize",
+        fdt::Error::ReservationsUnterminated => b"reservation block never terminates",
+        fdt::Error::TooManyReservations => b"more reservations than the map holds",
+        fdt::Error::ReservationEndOverflows => b"a reservation ends past the address space",
+        fdt::Error::StructTruncated => b"structure block is truncated",
+        fdt::Error::StructEndMissing => b"structure block has no FDT_END",
+        fdt::Error::UnknownToken => b"unknown structure block token",
+        fdt::Error::NodeNameUnterminated => b"node name is not terminated",
+        fdt::Error::NodeUnterminated => b"FDT_END with a node still open",
+        fdt::Error::UnbalancedEndNode => b"FDT_END_NODE outside any node",
+        fdt::Error::TooDeep => b"node nesting is deeper than the bound",
+        fdt::Error::NameOffsetOutOfBounds => b"property nameoff is outside the strings block",
+        fdt::Error::NameUnterminated => b"property name is not terminated",
+        fdt::Error::MalformedCellCount => b"a cell count property is not one cell",
+        fdt::Error::UnsupportedCellCount => b"a cell count is zero or above two",
+        fdt::Error::MalformedReg => b"memory node reg is empty or not whole pairs",
+        fdt::Error::TooManyRegions => b"more memory regions than the map holds",
+        fdt::Error::RegionEndOverflows => b"a memory region ends past the address space",
+    }
+}
+
+/// Say why the machine's memory could not be learned, and stop the machine.
+///
+/// No new authority: it is handed the console and the power token the boot path
+/// already holds, which is why `ci/constitution-check.sh --check minting-sites`
+/// still counts four call sites and not five. It is not [`crate::hal::FailStop`]
+/// either — that is the panic path's, behind a re-entrancy guard, and this is an
+/// ordinary boot-time refusal on a path where nothing has gone wrong with the
+/// kernel itself.
+///
+/// Every byte it writes is program text. `SKYNET_MEM_FAIL` comes before the boot
+/// marker and the marker is never reached, so `ci/boot-test.sh` fails on the
+/// absent marker while the console says which of a fixed set of things was
+/// wrong. It is deliberately not `SKYNET_PANIC` and not `SKYNET_FAULT`: those two
+/// mean the kernel has a bug, and this means its input was not usable.
+fn mem_fail(resources: BootResources<BootConsole, PowerControl>, reason: Reason) -> ! {
+    let BootResources {
+        mut console,
+        power,
+    } = resources;
+    console.write(b"\nSKYNET_MEM_FAIL\r\n  reason  ");
+    console.write(reason);
+    console.write(b"\r\n");
+    power.off()
 }

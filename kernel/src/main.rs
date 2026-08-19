@@ -50,9 +50,27 @@ const BOOT_MARKER: &[u8] = b"SKYNET_BOOT_OK\n";
 ///
 /// No globals, no statics, no initialisation phase, and no way to obtain a
 /// device it was not given.
-pub fn kernel_main<C: Console, P: Power>(mut res: BootResources<C, P>) -> ! {
-    res.console.write(BOOT_MARKER);
-    res.power.off()
+///
+/// It decomposes `BootResources` on its first line and never names it again,
+/// which is what RFC-0001 asked of that struct: a parameter list that is taken
+/// apart, not a registry something later reaches into. The frame allocator is
+/// bound and dropped here because M1 has nothing to allocate for yet — binding
+/// it is the honest shape, the same one `boot_rust` used for the memory map
+/// before there was anything to hand it to.
+///
+/// Nothing is printed about the memory that was found: no count, no address, no
+/// size. Printing a number needs a portable formatter, which is RFC-0001 O-4's
+/// design and not a `write!` added here, and constitutional invariant 5 is
+/// pending until M6 so nothing mechanical would have caught it.
+pub fn kernel_main<C: Console, P: Power>(res: BootResources<C, P>) -> ! {
+    let BootResources {
+        mut console,
+        power,
+        frames: _frames,
+    } = res;
+
+    console.write(BOOT_MARKER);
+    power.off()
 }
 
 /// Compile-time proof that the architecture implements the whole contract.

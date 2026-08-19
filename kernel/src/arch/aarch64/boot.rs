@@ -2,15 +2,16 @@
 
 //! Entry path: from the platform's first instruction to portable code.
 
-use core::arch::naked_asm;
+use core::arch::{asm, naked_asm};
 
-use crate::hal::{BootResources, Console, MemoryMap, Power};
+use crate::hal::{BootResources, Console, Power, Region};
 
 // `skynet_kernel::fdt` and not `crate::fdt`: `main.rs` binds only `hal` at the
-// crate root, and `main.rs` is not this task's to edit. Both names reach the
-// same library module.
+// crate root. Both names reach the same library module.
 use skynet_kernel::fdt;
+use skynet_kernel::frames::{self, FrameAllocator};
 
+use super::FRAME_SIZE;
 use super::pl011::BootConsole;
 use super::platform;
 use super::psci::PowerControl;
@@ -182,10 +183,17 @@ unsafe extern "C" fn _start() -> ! {
 /// follow it before then.
 ///
 /// The order is RFC-0003 section 5's and no other: mint the two devices, turn
-/// `x0` into a bounded window of bytes, parse it. A failure anywhere in that
-/// sequence writes `SKYNET_MEM_FAIL` and one compile-time reason, and powers the
-/// machine off — before the boot marker, so the gate fails on the absent marker
-/// while the console says why.
+/// `x0` into a bounded window of bytes, parse it, add what the tree cannot know
+/// to the reservations, place the bitmap, build the allocator. A failure
+/// anywhere in that sequence writes `SKYNET_MEM_FAIL` and one compile-time
+/// reason, and powers the machine off — before the boot marker, so the gate
+/// fails on the absent marker while the console says why.
+///
+/// The two devices are minted as separate values rather than straight into a
+/// [`BootResources`], because the struct now has a third field that does not
+/// exist yet at that point and the failure path needs the first two before it
+/// does. Nothing about their uniqueness changes: still one call site each, still
+/// reached once.
 ///
 /// # Safety
 ///
@@ -193,34 +201,24 @@ unsafe extern "C" fn _start() -> ! {
 /// valid stack and a zeroed `.bss`. It mints device tokens, which is sound only
 /// because there is exactly one call site.
 unsafe extern "C" fn boot_rust(dtb: u64) -> ! {
-    let resources = BootResources {
-        // SAFETY: single call site, reached once, before any other code has
-        // touched the PL011. `UART0_BASE` is the platform console's MMIO base.
-        console: unsafe { BootConsole::new(platform::UART0_BASE) },
-        // SAFETY: single call site, reached once, and `_start` has already
-        // established that we are at EL1 — where QEMU virt's PSCI conduit is
-        // HVC. Any other exception level parked and never reached here.
-        power: unsafe { PowerControl::new() },
+    // SAFETY: single call site, reached once, before any other code has
+    // touched the PL011. `UART0_BASE` is the platform console's MMIO base.
+    let console = unsafe { BootConsole::new(platform::UART0_BASE) };
+    // SAFETY: single call site, reached once, and `_start` has already
+    // established that we are at EL1 — where QEMU virt's PSCI conduit is
+    // HVC. Any other exception level parked and never reached here.
+    let power = unsafe { PowerControl::new() };
+
+    let frames = match frame_allocator(dtb) {
+        Ok(frames) => frames,
+        Err(reason) => mem_fail(console, power, reason),
     };
 
-    // Parsed and dropped. The allocator that reads it is T-0007's, where
-    // RFC-0003 section 5 puts the third field of `BootResources` and where
-    // RFC-0001's argument about that struct becoming a registry is re-checked.
-    // Binding it rather than discarding it is the honest shape: the value
-    // exists, it has no consumer yet, and no `#[allow]` or placeholder reader
-    // pretends otherwise.
-    //
-    // One consequence worth stating, because it is invisible: with the map
-    // unobserved, nothing but the error paths of `fdt::parse` is load-bearing in
-    // this build, and the optimiser is entitled to discard the work of filling a
-    // value nobody reads. What the failure path reports is unaffected — every
-    // check still runs, because its result is observed here.
-    let _map: MemoryMap = match memory_map(dtb) {
-        Ok(map) => map,
-        Err(reason) => mem_fail(resources, reason),
-    };
-
-    crate::kernel_main(resources)
+    crate::kernel_main(BootResources {
+        console,
+        power,
+        frames,
+    })
 }
 
 /// One of a fixed set of compile-time strings. Never a value read from the blob.
@@ -275,10 +273,185 @@ const TOTALSIZE_OFFSET: u64 = 4;
 /// The width of that field. It is a big-endian `u32`, like every header field.
 const TOTALSIZE_LEN: u64 = 4;
 
-/// Turn `x0` into a memory map, or into the reason it could not become one.
-fn memory_map(dtb: u64) -> Result<MemoryMap, Reason> {
+/// A fixed array in the memory map had no room for one of the kernel's own
+/// reservations.
+///
+/// [`crate::hal::MAX_RESERVED`] is sixteen and this path needs three of them.
+/// A blob that fills the array itself leaves no room, and the honest outcome is
+/// a refusal: an allocator built over a map that quietly forgot one of these
+/// three hands out the kernel image, the device tree, or its own bitmap.
+const NO_ROOM: Reason = b"no room left to record the kernel's own reservations";
+
+/// Turn `x0` into a frame allocator, or into the reason it could not become one.
+///
+/// This is RFC-0003 section 5's sequence, and the ORDER is the design. Each step
+/// depends on the one before it in a way that has a specific failure if it is
+/// reversed:
+///
+///   1. bound the blob and parse it — nothing else can happen before the kernel
+///      knows where memory is;
+///   2. reserve the kernel image and the blob — both are memory the tree does
+///      not know is spoken for, and both must be spoken for before anything
+///      looks for somewhere to put the bitmap;
+///   3. size and place the bitmap, which is checked against the reservations as
+///      they stand at that moment — that is, against the kernel image and the
+///      blob, and not against itself;
+///   4. add the bitmap to the reservations, so that the constructor marks its
+///      own storage used before the first `alloc`. An allocator that reserves
+///      its bitmap after handing out a frame can hand out its own bitmap, and
+///      the symptom is a corrupt allocator with no fault and no report;
+///   5. construct.
+///
+/// What is deliberately NOT reserved: the 512 KiB below `KERNEL_BASE`. It holds
+/// QEMU's 40-byte bootloader stub, which is dead the instant it branches here,
+/// and it is ordinary free memory. A reader who remembers RFC-0003's first
+/// revision will expect it to be spoken for; it is not, and nothing should make
+/// it so.
+fn frame_allocator(dtb: u64) -> Result<FrameAllocator, Reason> {
     let blob = blob_at(dtb)?;
-    fdt::parse(blob).map_err(reason_for)
+    let mut map = fdt::parse(blob).map_err(reason_for)?;
+
+    // The kernel image, `.bss` and the 64 KiB stack included. `__kernel_end` is
+    // ABOVE `.stack`, not below it — the linker script places `.bss` and then
+    // `.stack` and sets the symbol after both — so this one interval covers the
+    // stack as well, and the bitmap lands above the stack rather than in it.
+    map.push_reserved(kernel_image()).map_err(|_| NO_ROOM)?;
+
+    // The blob itself, at the address the loader chose, for the length that was
+    // validated before the window was built. Not a constant: RFC-0003 section 1a
+    // measured six different addresses from one binary, and on this machine it
+    // sits in the MIDDLE of the pool, splitting the free memory rather than
+    // trimming its bottom.
+    map.push_reserved(Region {
+        base: dtb,
+        len: blob.len() as u64,
+    })
+    .map_err(|_| NO_ROOM)?;
+
+    // The first frame boundary at or above `__kernel_end`, for as many frames as
+    // one bit per frame needs. Checked here — against the two reservations
+    // above — rather than in the constructor, which is why the constructor's
+    // safety contract can say the bitmap overlaps nothing else.
+    let place = frames::bitmap_placement(&map, FRAME_SIZE, kernel_end()).map_err(frames_reason)?;
+    map.push_reserved(place).map_err(|_| NO_ROOM)?;
+
+    // SAFETY: the one place in this kernel where a mutable slice is made out of
+    // memory nothing wrote down, and the four clauses `FrameAllocator::new`
+    // requires are established here, in order:
+    //
+    //   - MEMORY NOTHING ELSE REFERS TO. `place.base` is at or above
+    //     `__kernel_end`, so it is outside every section the linker placed and
+    //     outside the stack; it is frame-aligned, so it shares no frame with the
+    //     top of the image. Nothing else in this kernel constructs a reference
+    //     above `__kernel_end` — this is the only such site — and the borrow is
+    //     moved into the allocator on the next line and never duplicated. The
+    //     kernel is single-core here with interrupts masked and no DMA engine
+    //     running, so there is no other writer.
+    //   - INSIDE ONE OF THE MAP'S REGIONS. `bitmap_placement` returned only
+    //     after finding one run of whole frames containing `[base, base + len)`
+    //     entirely; a placement that straddles a hole is `BitmapOutsideRegions`.
+    //   - OVERLAPPING NONE OF THE MAP'S RESERVATIONS. Checked by the same call,
+    //     against the map as it stood one line earlier: the kernel image, the
+    //     blob, and every entry of the blob's own reservation block. The
+    //     bitmap's own entry is pushed AFTER that check, which is the one
+    //     reservation it is allowed — required — to coincide with.
+    //   - LONG ENOUGH FOR THE FRAME COUNT. `len` is `ceil(total / 8)` rounded up
+    //     to a whole frame, from the same `MemoryMap` the constructor re-reads,
+    //     and the constructor checks it again rather than trusting this.
+    //
+    // Alignment is 1 for `[u8]`. `len` is a whole number of frames and is
+    // bounded by the region containing it, so it is far below `isize::MAX` and
+    // `as usize` is exact on this target.
+    //
+    // What this does NOT claim, and cannot, is that the region is memory. The
+    // device tree is the only thing that says where RAM is, and this window came
+    // from it. If the tree lied, the constructor's first write raises a
+    // synchronous external abort, which the vector table reports as
+    // `SKYNET_FAULT` and shuts the machine down cleanly — the same backstop, and
+    // the same honest limit, as the blob window in `blob_at`.
+    let bitmap: &'static mut [u8] =
+        unsafe { core::slice::from_raw_parts_mut(place.base as *mut u8, place.len as usize) };
+
+    // SAFETY: the four clauses are established immediately above, at the one
+    // call site this constructor has.
+    unsafe { FrameAllocator::new(&map, bitmap, FRAME_SIZE) }.map_err(frames_reason)
+}
+
+/// The kernel image, from `KERNEL_BASE` to `__kernel_end`.
+///
+/// Both bounds come from the linker rather than from a number here: a constant
+/// that has to agree with `link.ld` is a constant that will one day not.
+fn kernel_image() -> Region {
+    let base = kernel_base();
+    Region {
+        base,
+        // `__kernel_end` is above `KERNEL_BASE` by at least the 64 KiB stack, so
+        // this cannot wrap. The linker asserts the ordering that makes that true.
+        len: kernel_end() - base,
+    }
+}
+
+/// `KERNEL_BASE`, the address the image is linked at and loaded to.
+fn kernel_base() -> u64 {
+    // SAFETY: `adrp`/`add` compute the address a linker symbol resolves to into
+    // a register. No memory is read or written and no flag is touched, which is
+    // what the options assert; the symbol is defined by `link.ld` so the
+    // relocation cannot be left unresolved at link time.
+    //
+    // This is inline assembly rather than an `extern "C" { static … }` for one
+    // reason: an extern static is a `static` item, and this kernel has one
+    // deliberately — the failure path's re-entrancy guard. A linker symbol is an
+    // address, not a value, and declaring it as a static invites a read through
+    // it that means nothing.
+    let value: u64;
+    unsafe {
+        asm!(
+            "adrp {0}, KERNEL_BASE",
+            "add  {0}, {0}, #:lo12:KERNEL_BASE",
+            out(reg) value,
+            options(nomem, nostack, preserves_flags, pure),
+        );
+    }
+    value
+}
+
+/// `__kernel_end`: one past the last byte the image occupies, stack included.
+fn kernel_end() -> u64 {
+    // SAFETY: as `kernel_base`.
+    let value: u64;
+    unsafe {
+        asm!(
+            "adrp {0}, __kernel_end",
+            "add  {0}, {0}, #:lo12:__kernel_end",
+            out(reg) value,
+            options(nomem, nostack, preserves_flags, pure),
+        );
+    }
+    value
+}
+
+/// The allocator's diagnosis, as one of a fixed set of strings.
+///
+/// Exhaustive for the same reason [`reason_for`] is: adding a variant to
+/// `frames::Error` fails to compile until someone decides what the console
+/// should say about it.
+fn frames_reason(err: frames::Error) -> Reason {
+    match err {
+        frames::Error::BadFrameSize => b"frame size is zero or not a power of two",
+        frames::Error::RegionEndOverflows => b"a memory region ends past the address space",
+        frames::Error::RegionsOverlap => b"two memory regions cover the same memory",
+        frames::Error::TooManyFrames => b"more frames than the frame index space holds",
+        frames::Error::NoUsableFrames => b"no whole frame lies inside any memory region",
+        frames::Error::ReservationEndOverflows => b"a reservation ends past the address space",
+        frames::Error::BitmapEndOverflows => b"the frame bitmap ends past the address space",
+        frames::Error::BitmapOutsideRegions => {
+            b"no memory region contains the frame bitmap's placement"
+        }
+        frames::Error::BitmapOverlapsReservation => {
+            b"the frame bitmap's placement is already spoken for"
+        }
+        frames::Error::BitmapTooSmall => b"the frame bitmap is too small for the frame count",
+    }
 }
 
 /// Turn a raw physical address into a bounded window of bytes.
@@ -448,11 +621,7 @@ fn reason_for(err: fdt::Error) -> Reason {
 /// absent marker while the console says which of a fixed set of things was
 /// wrong. It is deliberately not `SKYNET_PANIC` and not `SKYNET_FAULT`: those two
 /// mean the kernel has a bug, and this means its input was not usable.
-fn mem_fail(resources: BootResources<BootConsole, PowerControl>, reason: Reason) -> ! {
-    let BootResources {
-        mut console,
-        power,
-    } = resources;
+fn mem_fail(mut console: BootConsole, power: PowerControl, reason: Reason) -> ! {
     console.write(b"\nSKYNET_MEM_FAIL\r\n  reason  ");
     console.write(reason);
     console.write(b"\r\n");

@@ -98,9 +98,24 @@ pub trait FailStop {
 ///
 /// Generic so that portable code cannot name a concrete device type, and
 /// therefore cannot acquire one by any route other than being handed this.
+///
+/// # The third field
+///
+/// RFC-0001 warned about this struct specifically: it must stay a boot-time
+/// artefact decomposed at the top of `kernel_main`, and must never become "a
+/// registry, a lookup table, or a long-lived value later code reaches into" —
+/// with a method returning a device by name or index named as "the moment this
+/// went wrong". There is no such method here and there is no lookup. Three owned
+/// values, moved once, destructured immediately.
+///
+/// [`crate::frames::FrameAllocator`] is not generic, and the asymmetry is the
+/// point rather than an oversight: the console and the power token are devices,
+/// so portable code must not be able to name their types, while the allocator is
+/// portable code itself and there is only one of it.
 pub struct BootResources<C: Console, P: Power> {
     pub console: C,
     pub power: P,
+    pub frames: crate::frames::FrameAllocator,
 }
 
 // ---------------------------------------------------------------------------
@@ -203,7 +218,17 @@ impl MemoryMap {
     }
 
     /// Record a region that is already spoken for.
-    pub(crate) fn push_reserved(&mut self, region: Region) -> Result<(), Full> {
+    ///
+    /// `pub`, where [`MemoryMap::push_region`] is not, and the asymmetry is the
+    /// whole argument for it. RFC-0003 section 5 has the boot path add three
+    /// things the device tree cannot know about — the kernel image, the blob at
+    /// the address `x0` gave, and the bitmap once it has been sized — and the
+    /// boot path is in the binary target, which cannot reach a `pub(crate)`
+    /// item of this library. A reservation can only ever make the allocator hand
+    /// out **less** memory; a region can make it hand out memory that does not
+    /// exist. So the one that is safe to widen is widened and the one that is
+    /// not stays where the parser can reach it and nothing else can.
+    pub fn push_reserved(&mut self, region: Region) -> Result<(), Full> {
         if self.reserved_count == MAX_RESERVED {
             return Err(Full);
         }

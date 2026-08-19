@@ -318,10 +318,11 @@ pub fn bitmap_placement(
             .base
             .checked_add(entry.len)
             .ok_or(Error::ReservationEndOverflows)?;
-        // Byte-level overlap, not frame-level. Frame-level would refuse a
-        // placement that merely shares a frame with the top of the kernel
-        // image, and the placement is frame-aligned above `__kernel_end`, so it
-        // never can.
+        // Byte-level overlap, and for this interval that is the same test as a
+        // frame-level one: `base` is frame-aligned and `len` is a whole number
+        // of frames, so every byte of every frame the bitmap occupies is a byte
+        // of the bitmap. An entry ending below `base` rounds outward to a frame
+        // at or below `base - frame_size` and cannot reach it.
         if base < entry_end && entry.base < end {
             return Err(Error::BitmapOverlapsReservation);
         }
@@ -1269,6 +1270,30 @@ mod tests {
                 base < place.base || base >= place.base + place.len,
                 "frame at {base:#x} is inside the bitmap"
             );
+        }
+    }
+
+    /// Nothing in this module is written for 4 KiB in particular.
+    ///
+    /// `FS` above is a fixture so that these tests read like the machine; it is
+    /// not a second definition of `FRAME_SIZE`, which lives in `arch` where
+    /// portable code cannot reach it and arrives here as a parameter. This is
+    /// what makes that claim checkable rather than a comment: the same region
+    /// and the same one-byte reservation, at three different granules, with the
+    /// frame count and the reserved index following the granule each time.
+    #[test]
+    fn no_frame_size_is_baked_in() {
+        let map = map_of(&[(RAM, 0x10000)], &[(RAM + 0x201, 1)]);
+        for (fs, total, reserved) in [(512usize, 128usize, 1usize), (4096, 16, 0), (16384, 4, 0)] {
+            assert_eq!(layout(&map, fs).unwrap().total, total);
+            // SAFETY: fresh leaked storage this test owns; see `allocator`.
+            let mut a =
+                unsafe { FrameAllocator::new(&map, bitmap(bitmap_len(total)), fs) }.unwrap();
+            assert_eq!(a.total(), total);
+            assert_eq!(a.available(), total - 1);
+            let taken = indices(&drain(&mut a));
+            assert!(!taken.contains(&reserved), "granule {fs}");
+            assert_eq!(taken.len(), total - 1, "granule {fs}");
         }
     }
 

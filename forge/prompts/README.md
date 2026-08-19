@@ -102,6 +102,21 @@ cd "$D" && git checkout -q <the-branch-head-you-were-given>
 
 Use a private target directory too, so a sibling's build artefacts cannot be mistaken for yours.
 
+**And keep every artefact you produce inside that directory.** Not only the build: probe images,
+memory dumps, disassembly, logs, blobs you extract from a running machine. The scratchpad whose path
+your briefing gives you is *shared*, and more than one judge may be measuring the same contribution
+in it at the same time.
+
+This is not hypothetical. A judge's first analysis pass ingested a `bitmap-64M.bin` it had not
+written, and came close to publishing another judge's dump as its own measurement. It was caught on
+a timestamp check, and it re-took every number in a private directory afterwards.
+
+A stolen measurement is worse than a missing one. A missing measurement is visible as an absence; a
+sibling's dump has the right shape, the right size, and the right name, and it will agree with your
+expectations often enough to survive a careless reading. If a file you did not create appears where
+you are working, say so in your verdict — that a judge had to defend itself against its own working
+directory is a finding about the process, and it belongs on the record with the rest.
+
 **Clone, do not `git archive`.** This said `git archive | tar -x` and a judge measured what that costs: an extracted tree has no `.git`, and two constitutional checks go quiet in it —
 
 ```
